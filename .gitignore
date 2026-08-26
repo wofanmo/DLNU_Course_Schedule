@@ -19,3 +19,6 @@ captures
 node_modules/
 .claude
 .agents
+docs
+CLAUDE.md
+skills-lock.json
