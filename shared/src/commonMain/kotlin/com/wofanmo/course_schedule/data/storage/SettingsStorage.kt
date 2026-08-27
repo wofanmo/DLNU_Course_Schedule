@@ -1,6 +1,7 @@
 package com.wofanmo.course_schedule.data.storage
 
 import com.russhwolf.settings.Settings
+import com.wofanmo.course_schedule.AppEvents
 import com.wofanmo.course_schedule.data.model.AppConfig
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -20,5 +21,6 @@ class SettingsStorage(private val settings: Settings) {
     fun saveConfig(config: AppConfig) {
         val configString = json.encodeToString(config)
         settings.putString(StorageKeys.APP_CONFIG, configString)
+        AppEvents.scheduleVersion.intValue++
     }
 }

@@ -3,90 +3,210 @@ package com.wofanmo.course_schedule.ui
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.wofanmo.course_schedule.AppEvents
 import com.wofanmo.course_schedule.AppSettings
-import com.wofanmo.course_schedule.data.model.AppConfig
+import com.wofanmo.course_schedule.data.model.Schedule
+import com.wofanmo.course_schedule.ui.components.AnimatedListItem
+import com.wofanmo.course_schedule.ui.components.ExpandableSettingItem
+import kotlinx.datetime.Instant
+import kotlinx.datetime.LocalDate
+import kotlinx.datetime.TimeZone
+import kotlinx.datetime.atStartOfDayIn
+import kotlinx.datetime.toLocalDateTime
 
 @Composable
 fun SettingsScreen(modifier: Modifier = Modifier) {
     var config by remember { mutableStateOf(AppSettings.settingsStorage.getConfig()) }
-    val schedules = remember { AppSettings.scheduleStorage.getAll() }
+    var expandedSection by remember { mutableStateOf<String?>(null) }
 
     LazyColumn(
-        modifier = modifier
-            .fillMaxSize()
-            .padding(16.dp),
+        modifier = modifier.fillMaxSize(),
+        contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         item {
             Text(
                 text = "设置",
                 fontSize = 24.sp,
-                fontWeight = FontWeight.Bold
+                style = MaterialTheme.typography.headlineMedium,
+                color = MaterialTheme.colorScheme.onBackground
             )
         }
 
-        // 课表选择
+        // 课程表选择 + 删除
         item {
-            Card(
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(
-                    modifier = Modifier.padding(16.dp)
+            AnimatedListItem(index = 0) {
+                ExpandableSettingItem(
+                    title = "课程表管理",
+                    expanded = expandedSection == "schedule",
+                    onToggle = {
+                        expandedSection = if (expandedSection == "schedule") null else "schedule"
+                    }
                 ) {
-                    Text(
-                        text = "当前课表",
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.Medium
-                    )
+                    val dataVersion = AppEvents.scheduleVersion.intValue
+                    val schedules = remember(dataVersion) { AppSettings.scheduleStorage.getAll() }
+                    var scheduleToDelete by remember { mutableStateOf<Schedule?>(null) }
+                    var datePickTarget by remember { mutableStateOf<Schedule?>(null) }
 
-                    Spacer(modifier = Modifier.height(8.dp))
+                    if (schedules.isEmpty()) {
+                        Text(
+                            text = "暂无课程表，可通过教务导入或手动添加课程",
+                            fontSize = 14.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    } else {
+                        schedules.forEach { schedule ->
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 4.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    // 课表名称 + 选中标记
+                                    Row(
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .clip(RoundedCornerShape(8.dp))
+                                            .clickable {
+                                                config = config.copy(currentScheduleId = schedule.id)
+                                                AppSettings.settingsStorage.saveConfig(config)
+                                            }
+                                            .padding(8.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            text = schedule.name,
+                                            fontSize = 16.sp,
+                                            fontWeight = if (schedule.id == config.currentScheduleId) FontWeight.Bold else FontWeight.Normal,
+                                            color = if (schedule.id == config.currentScheduleId) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                                            modifier = Modifier.weight(1f)
+                                        )
+                                        if (schedule.id == config.currentScheduleId) {
+                                            Text(
+                                                text = "✓",
+                                                color = MaterialTheme.colorScheme.primary,
+                                                fontSize = 16.sp
+                                            )
+                                        }
+                                    }
 
-                    schedules.forEach { schedule ->
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable {
-                                    config = config.copy(currentScheduleId = schedule.id)
-                                    AppSettings.settingsStorage.saveConfig(config)
+                                    // 删除按钮
+                                    Surface(
+                                        onClick = { scheduleToDelete = schedule },
+                                        shape = CircleShape,
+                                        color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.3f),
+                                        modifier = Modifier.size(32.dp)
+                                    ) {
+                                        Box(contentAlignment = Alignment.Center) {
+                                            Icon(
+                                                imageVector = Icons.Default.Delete,
+                                                contentDescription = "删除",
+                                                tint = MaterialTheme.colorScheme.error,
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                        }
+                                    }
                                 }
-                                .padding(vertical = 8.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column {
-                                Text(
-                                    text = schedule.name,
-                                    fontSize = 14.sp
-                                )
-                                Text(
-                                    text = "共 ${schedule.totalWeeks} 周 · ${schedule.courses.size} 门课程",
-                                    fontSize = 12.sp,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
 
-                            if (schedule.id == config.currentScheduleId) {
-                                Text(
-                                    text = "✓",
-                                    style = MaterialTheme.typography.titleLarge,
-                                    color = MaterialTheme.colorScheme.primary
-                                )
+                                // 开学日期行（点击弹出日期选择器单独修改）
+                                Row(
+                                    modifier = Modifier
+                                        .padding(start = 8.dp)
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .clickable { datePickTarget = schedule }
+                                        .padding(horizontal = 6.dp, vertical = 4.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = "开学日期",
+                                        fontSize = 13.sp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    Spacer(Modifier.width(6.dp))
+                                    Text(
+                                        text = schedule.startDate,
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.Medium,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                    Spacer(Modifier.width(4.dp))
+                                    Icon(
+                                        imageVector = Icons.Default.Edit,
+                                        contentDescription = "修改开学日期",
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.size(13.dp)
+                                    )
+                                }
                             }
                         }
                     }
 
-                    if (schedules.isEmpty()) {
-                        Text(
-                            text = "暂无课表，请先导入课表",
-                            fontSize = 14.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                    // 删除确认对话框
+                    scheduleToDelete?.let { target ->
+                        AlertDialog(
+                            onDismissRequest = { scheduleToDelete = null },
+                            title = { Text("删除课程表") },
+                            text = {
+                                Text(
+                                    "确定删除「${target.name}」吗？\n共 ${target.courses.size} 门课程，删除后无法恢复。",
+                                    style = MaterialTheme.typography.bodyMedium
+                                )
+                            },
+                            confirmButton = {
+                                TextButton(
+                                    onClick = {
+                                        AppSettings.scheduleStorage.delete(target.id)
+                                        // 删除的是当前课表 → 自动切换到剩余第一个
+                                        if (target.id == config.currentScheduleId) {
+                                            val remaining = AppSettings.scheduleStorage.getAll()
+                                            config = config.copy(
+                                                currentScheduleId = remaining.firstOrNull()?.id ?: ""
+                                            )
+                                            AppSettings.settingsStorage.saveConfig(config)
+                                        }
+                                        scheduleToDelete = null
+                                    },
+                                    colors = ButtonDefaults.textButtonColors(
+                                        contentColor = MaterialTheme.colorScheme.error
+                                    )
+                                ) {
+                                    Text("删除")
+                                }
+                            },
+                            dismissButton = {
+                                TextButton(onClick = { scheduleToDelete = null }) {
+                                    Text("取消")
+                                }
+                            }
+                        )
+                    }
+
+                    // 开学日期选择对话框
+                    datePickTarget?.let { target ->
+                        ScheduleDatePickerDialog(
+                            initialDate = target.startDate,
+                            onConfirm = { newDate ->
+                                AppSettings.scheduleStorage.save(target.copy(startDate = newDate))
+                                datePickTarget = null
+                            },
+                            onDismiss = { datePickTarget = null }
                         )
                     }
                 }
@@ -95,73 +215,21 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
 
         // 显示设置
         item {
-            Card(
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(
-                    modifier = Modifier.padding(16.dp)
-                ) {
-                    Text(
-                        text = "显示设置",
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.Medium
-                    )
-
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    // 每天节次
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = "每天节次",
-                            fontSize = 14.sp
-                        )
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            IconButton(
-                                onClick = {
-                                    if (config.totalSections > 1) {
-                                        config = config.copy(totalSections = config.totalSections - 1)
-                                        AppSettings.settingsStorage.saveConfig(config)
-                                    }
-                                }
-                            ) {
-                                Text("-", fontSize = 18.sp)
-                            }
-                            Text(
-                                text = config.totalSections.toString(),
-                                fontSize = 16.sp,
-                                modifier = Modifier.padding(horizontal = 16.dp)
-                            )
-                            IconButton(
-                                onClick = {
-                                    if (config.totalSections < 15) {
-                                        config = config.copy(totalSections = config.totalSections + 1)
-                                        AppSettings.settingsStorage.saveConfig(config)
-                                    }
-                                }
-                            ) {
-                                Text("+", fontSize = 18.sp)
-                            }
-                        }
+            AnimatedListItem(index = 1) {
+                ExpandableSettingItem(
+                    title = "显示设置",
+                    expanded = expandedSection == "display",
+                    onToggle = {
+                        expandedSection = if (expandedSection == "display") null else "display"
                     }
-
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    // 显示周末
+                ) {
                     Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 8.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        Text(
-                            text = "显示周末",
-                            fontSize = 14.sp
-                        )
+                        Text(text = "显示周末", fontSize = 16.sp)
                         Switch(
                             checked = config.showWeekends,
                             onCheckedChange = {
@@ -176,44 +244,41 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
 
         // 主题设置
         item {
-            Card(
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(
-                    modifier = Modifier.padding(16.dp)
+            AnimatedListItem(index = 2) {
+                ExpandableSettingItem(
+                    title = "主题",
+                    expanded = expandedSection == "theme",
+                    onToggle = {
+                        expandedSection = if (expandedSection == "theme") null else "theme"
+                    }
                 ) {
-                    Text(
-                        text = "主题",
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.Medium
-                    )
-
-                    Spacer(modifier = Modifier.height(8.dp))
-
                     listOf("system" to "跟随系统", "light" to "浅色", "dark" to "深色").forEach { (value, label) ->
+                        val selected = config.theme == value
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
+                                .clip(RoundedCornerShape(8.dp))
                                 .clickable {
                                     config = config.copy(theme = value)
                                     AppSettings.settingsStorage.saveConfig(config)
                                 }
-                                .padding(vertical = 8.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
+                                .padding(horizontal = 4.dp, vertical = 4.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
+                            RadioButton(
+                                selected = selected,
+                                onClick = {
+                                    config = config.copy(theme = value)
+                                    AppSettings.settingsStorage.saveConfig(config)
+                                }
+                            )
                             Text(
                                 text = label,
-                                fontSize = 14.sp
+                                fontSize = 16.sp,
+                                fontWeight = if (selected) FontWeight.Medium else FontWeight.Normal,
+                                color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier.padding(start = 8.dp)
                             )
-
-                            if (config.theme == value) {
-                                Text(
-                                    text = "✓",
-                                    style = MaterialTheme.typography.titleLarge,
-                                    color = MaterialTheme.colorScheme.primary
-                                )
-                            }
                         }
                     }
                 }
@@ -222,27 +287,80 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
 
         // 关于
         item {
-            Card(
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(
-                    modifier = Modifier.padding(16.dp)
+            AnimatedListItem(index = 3) {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
                 ) {
-                    Text(
-                        text = "关于",
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.Medium
-                    )
-
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    Text(
-                        text = "课程表 v1.0",
-                        fontSize = 14.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text(
+                            text = "关于",
+                            fontSize = 16.sp,
+                            style = MaterialTheme.typography.titleMedium
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = "课程表 v1.0",
+                            fontSize = 14.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
             }
         }
+    }
+}
+
+/**
+ * 开学日期选择对话框（Material3 DatePicker），确认后回传 yyyy-MM-dd。
+ * DatePicker 内部用 UTC 毫秒表示所选日期（UTC 零点），转换时必须用 UTC，否则时区偏移会导致日期差一天。
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ScheduleDatePickerDialog(
+    initialDate: String,
+    onConfirm: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val initialMillis = try {
+        LocalDate.parse(initialDate).atStartOfDayIn(TimeZone.UTC).toEpochMilliseconds()
+    } catch (e: Exception) {
+        null
+    }
+    val dateState = rememberDatePickerState(initialSelectedDateMillis = initialMillis)
+
+    DatePickerDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    val millis = dateState.selectedDateMillis
+                    if (millis != null) {
+                        val date = Instant.fromEpochMilliseconds(millis)
+                            .toLocalDateTime(TimeZone.UTC).date
+                        onConfirm(date.toString()) // ISO 格式 yyyy-MM-dd
+                    } else {
+                        onDismiss()
+                    }
+                }
+            ) { Text("确定") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("取消") }
+        }
+    ) {
+        DatePicker(
+            state = dateState,
+            title = {
+                Text(
+                    text = "选择开学日期",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(start = 24.dp, top = 16.dp)
+                )
+            }
+        )
     }
 }

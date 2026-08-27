@@ -1,6 +1,7 @@
 package com.wofanmo.course_schedule.data.storage
 
 import com.russhwolf.settings.Settings
+import com.wofanmo.course_schedule.AppEvents
 import com.wofanmo.course_schedule.data.model.Schedule
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -31,6 +32,7 @@ class ScheduleStorage(private val settings: Settings) {
         }
         val schedulesString = json.encodeToString(schedules)
         settings.putString(StorageKeys.SCHEDULES, schedulesString)
+        AppEvents.scheduleVersion.intValue++
     }
 
     fun delete(id: String) {
@@ -38,5 +40,6 @@ class ScheduleStorage(private val settings: Settings) {
         schedules.removeAll { it.id == id }
         val schedulesString = json.encodeToString(schedules)
         settings.putString(StorageKeys.SCHEDULES, schedulesString)
+        AppEvents.scheduleVersion.intValue++
     }
 }

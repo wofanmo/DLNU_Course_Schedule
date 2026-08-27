@@ -32,3 +32,20 @@ actual fun calculateWeeksBetween(startDate: String, currentDate: DateInfo): Int 
         1
     }
 }
+
+actual fun getDateForWeekDay(startDate: String, week: Int, dayOfWeek: Int): DateInfo? {
+    return try {
+        val start = LocalDate.parse(startDate)
+        // week=1 表示第一周，dayOfWeek=1 表示周一
+        // 计算目标日期：开学日期 + (week-1) 周 + (dayOfWeek-1) 天
+        val targetDate = start.plus((week - 1) * 7 + (dayOfWeek - 1), DateTimeUnit.DAY)
+        DateInfo(
+            year = targetDate.year,
+            month = targetDate.monthNumber,
+            day = targetDate.dayOfMonth,
+            dayOfWeek = targetDate.dayOfWeek.isoDayNumber
+        )
+    } catch (e: Exception) {
+        null
+    }
+}
