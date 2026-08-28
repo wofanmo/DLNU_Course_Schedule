@@ -25,6 +25,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.wofanmo.course_schedule.AppEvents
@@ -125,17 +126,63 @@ fun ScheduleScreen(modifier: Modifier = Modifier) {
             }
         }
 
-        // 星期标题行 - 显示具体日期（带缓存）
-        WeekDayHeader(
-            schedule = schedule,
-            currentWeek = currentWeek,
-            today = today,
-            showWeekends = config.showWeekends
-        )
+        // 布局尺寸与行偏移（时间栏 / 课程区 / 分隔线共用）
+        val totalSections = config.totalSectionCount()
+        val sectionHeight = 60.dp
+        val lunchBreakIndex = config.lunchBreakIndex()
+        val eveningBreakIndex = config.eveningBreakIndex()
+        val daysToShow = if (config.showWeekends) 7 else 5
+
+        val rowOffsets = remember(totalSections, lunchBreakIndex, eveningBreakIndex) {
+            val offsets = IntArray(totalSections)
+            var y = 0
+            for (i in 0 until totalSections) {
+                offsets[i] = y
+                y += 60 // sectionHeight
+                if (i == lunchBreakIndex && totalSections > lunchBreakIndex + 1) y += 32 // breakHeight
+                if (i == eveningBreakIndex && totalSections > eveningBreakIndex + 1) y += 32
+            }
+            offsets
+        }
+        val totalGridHeight = remember(rowOffsets) { (rowOffsets.lastOrNull() ?: 0) + 60 + 16 }
+
+        // 星期标题行：左侧"节"列固定，日期列随周次滑动
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 8.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .width(56.dp)
+                    .height(40.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = "节",
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Box(modifier = Modifier.weight(1f)) {
+                AnimatedContent(
+                    targetState = currentWeek,
+                    transitionSpec = { weekTransition() },
+                    label = "weekHeaderTransition"
+                ) { week ->
+                    WeekDayHeader(
+                        schedule = schedule,
+                        currentWeek = week,
+                        today = today,
+                        showWeekends = config.showWeekends
+                    )
+                }
+            }
+        }
 
         HorizontalDivider()
 
-        // 课程表网格 - 支持滑动手势
+        // 内容区：左侧时间栏固定不动，仅课程卡片区域随周次水平滑动
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -161,16 +208,66 @@ fun ScheduleScreen(modifier: Modifier = Modifier) {
                     )
                 }
         ) {
-            ScheduleGrid(
-                schedule = schedule,
-                week = currentWeek,
-                totalSections = config.totalSectionCount(),
-                showWeekends = config.showWeekends,
-                sectionTimes = DEFAULT_SECTION_TIMES,
-                lunchBreakIndex = config.lunchBreakIndex(),
-                eveningBreakIndex = config.eveningBreakIndex(),
-                onCourseClick = { selectedCourse = it }
-            )
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
+                    .padding(8.dp)
+            ) {
+                BoxWithConstraints(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(totalGridHeight.dp)
+                ) {
+                    val dayWidth = (maxWidth - 56.dp) / daysToShow
+
+                    Row(modifier = Modifier.fillMaxWidth()) {
+                        // 固定左侧时间栏（不参与周次切换动画）
+                        SectionTimeColumn(
+                            totalSections = totalSections,
+                            rowOffsets = rowOffsets,
+                            sectionHeight = sectionHeight,
+                            totalGridHeight = totalGridHeight,
+                            sectionTimes = DEFAULT_SECTION_TIMES
+                        )
+                        // 课程卡片区域：随周次滑动切换
+                        Box(modifier = Modifier.weight(1f)) {
+                            AnimatedContent(
+                                targetState = currentWeek,
+                                transitionSpec = { weekTransition() },
+                                modifier = Modifier.fillMaxSize(),
+                                label = "weekGridTransition"
+                            ) { week ->
+                                CourseCardArea(
+                                    schedule = schedule,
+                                    week = week,
+                                    totalSections = totalSections,
+                                    daysToShow = daysToShow,
+                                    dayWidth = dayWidth,
+                                    rowOffsets = rowOffsets,
+                                    sectionHeight = sectionHeight,
+                                    totalGridHeight = totalGridHeight,
+                                    onCourseClick = { selectedCourse = it }
+                                )
+                            }
+                        }
+                    }
+
+                    // 午休/晚休分隔线（固定渲染，不随周次动画）
+                    if (lunchBreakIndex in 0 until totalSections - 1) {
+                        BreakDivider(
+                            text = "午休",
+                            offsetY = rowOffsets[lunchBreakIndex] + 60
+                        )
+                    }
+                    if (eveningBreakIndex in 0 until totalSections - 1) {
+                        BreakDivider(
+                            text = "晚休",
+                            offsetY = rowOffsets[eveningBreakIndex] + 60
+                        )
+                    }
+                }
+            }
         }
     }
 
@@ -287,25 +384,8 @@ fun WeekDayHeader(
         }
     }
 
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 8.dp)
-    ) {
-        // 节次列标题
-        Box(
-            modifier = Modifier
-                .width(56.dp)
-                .height(40.dp),
-            contentAlignment = Alignment.Center
-        ) {
-            Text(
-                text = "节",
-                fontSize = 12.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
-
+    // 左侧"节"列由调用处固定渲染，此处只绘制随周次切换的日期列
+    Row(modifier = Modifier.fillMaxWidth()) {
         // 周一到周日 - 显示日期
         for (day in 1..daysToShow) {
             val dateForDay = weekDates.getOrNull(day - 1)
@@ -370,21 +450,73 @@ fun WeekDayHeader(
     }
 }
 
+/** 周次切换转场：切到更后面的周从右进/向左出，切到更前面的周从左进/向右出 */
+private fun AnimatedContentTransitionScope<Int>.weekTransition(): ContentTransform =
+    if (targetState > initialState) {
+        (slideInHorizontally(animationSpec = tween(300)) { it } + fadeIn(tween(300)))
+            .togetherWith(slideOutHorizontally(animationSpec = tween(300)) { -it } + fadeOut(tween(300)))
+    } else {
+        (slideInHorizontally(animationSpec = tween(300)) { -it } + fadeIn(tween(300)))
+            .togetherWith(slideOutHorizontally(animationSpec = tween(300)) { it } + fadeOut(tween(300)))
+    }
+
+/** 左侧固定节次时间栏：不随周次切换动画移动，随内容垂直滚动 */
 @Composable
-fun ScheduleGrid(
+private fun SectionTimeColumn(
+    totalSections: Int,
+    rowOffsets: IntArray,
+    sectionHeight: Dp,
+    totalGridHeight: Int,
+    sectionTimes: List<com.wofanmo.course_schedule.data.model.SectionTime>,
+) {
+    Box(
+        modifier = Modifier
+            .width(56.dp)
+            .height(totalGridHeight.dp)
+    ) {
+        for (section in 1..totalSections) {
+            val sectionIndex = section - 1
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(sectionHeight)
+                    .offset(y = rowOffsets[sectionIndex].dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(
+                        text = section.toString(),
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    val time = sectionTimes.getOrNull(sectionIndex)
+                    if (time != null) {
+                        Text(
+                            text = "${time.start}-${time.end}",
+                            fontSize = 8.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                            maxLines = 1
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** 课程卡片区域（不含左侧时间栏）：绝对定位绘制本周课程卡片，周次切换动画由外层控制 */
+@Composable
+private fun CourseCardArea(
     schedule: com.wofanmo.course_schedule.data.model.Schedule?,
     week: Int,
     totalSections: Int,
-    showWeekends: Boolean,
-    sectionTimes: List<com.wofanmo.course_schedule.data.model.SectionTime> = emptyList(),
-    lunchBreakIndex: Int = 3,
-    eveningBreakIndex: Int = 7,
-    onCourseClick: (Course) -> Unit = {},
+    daysToShow: Int,
+    dayWidth: Dp,
+    rowOffsets: IntArray,
+    sectionHeight: Dp,
+    totalGridHeight: Int,
+    onCourseClick: (Course) -> Unit,
 ) {
-    val daysToShow = if (showWeekends) 7 else 5
-    val sectionHeight = 60.dp
-    val breakHeight = 32.dp
-
     // 预计算本周课程（只保留在本周有效的）
     val weekCourses = remember(schedule, week) {
         schedule?.courses?.filter { course ->
@@ -401,28 +533,6 @@ fun ScheduleGrid(
         }
     }
 
-    // 每行的起始 Y 偏移（累计：节次行 + 分隔线）
-    val rowOffsets = remember(totalSections, lunchBreakIndex, eveningBreakIndex) {
-        val offsets = IntArray(totalSections)
-        var y = 0
-        for (i in 0 until totalSections) {
-            offsets[i] = y
-            y += sectionHeight.value.toInt()
-            if (i == lunchBreakIndex && totalSections > lunchBreakIndex + 1) {
-                y += breakHeight.value.toInt()
-            }
-            if (i == eveningBreakIndex && totalSections > eveningBreakIndex + 1) {
-                y += breakHeight.value.toInt()
-            }
-        }
-        offsets
-    }
-
-    // 整表总高度（底部留 8dp padding）
-    val totalGridHeight = remember(rowOffsets) {
-        (rowOffsets.lastOrNull() ?: 0) + sectionHeight.value.toInt() + 16
-    }
-
     // 定位卡片：只绘制每门课在起始节的卡片，用 offset(y) 撑满跨节高度
     val cards = remember(weekCourses, rowOffsets, totalSections) {
         weekCourses.mapNotNull { course ->
@@ -437,105 +547,43 @@ fun ScheduleGrid(
         }
     }
 
-    Column(
+    // 同天同节次多课程水平平分宽度，避免重叠
+    val grouped = remember(cards) {
+        // key = (day, yStart, height) —— 同天同起止位置的课程归为一组
+        cards.groupBy { (c, y, h) -> Triple(c.dayOfWeek, y, h) }
+    }
+
+    Box(
         modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(8.dp)
+            .fillMaxWidth()
+            .height(totalGridHeight.dp)
     ) {
-        // 网格容器：绝对定位所有课程卡片
-        BoxWithConstraints(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(totalGridHeight.dp)
-        ) {
-            val dayWidth = (maxWidth - 56.dp) / daysToShow
+        // 绘制课程卡片（绝对定位，跨节撑满高度）
+        grouped.forEach { (key, group) ->
+            val day = key.first
+            if (day !in 1..daysToShow) return@forEach
+            val yOffset = key.second
+            val height = key.third
+            val count = group.size
+            val cellWidth = dayWidth / count   // 同格多课平分宽度
 
-            // 逐行绘制节次标签
-            for (section in 1..totalSections) {
-                val sectionIndex = section - 1
-                Row(
+            group.forEachIndexed { idx, (course, _, _) ->
+                Box(
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .height(sectionHeight)
-                        .offset(y = rowOffsets[sectionIndex].dp)
-                ) {
-                    // 节次标签：节次号 + 起止时间
-                    val time = sectionTimes.getOrNull(sectionIndex)
-                    Box(
-                        modifier = Modifier
-                            .width(56.dp)
-                            .fillMaxHeight(),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text(
-                                text = section.toString(),
-                                fontSize = 12.sp,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            if (time != null) {
-                                Text(
-                                    text = "${time.start}-${time.end}",
-                                    fontSize = 8.sp,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                                    maxLines = 1
-                                )
-                            }
-                        }
-                    }
-                    // 课程区域占位（透明，卡片由绝对定位层绘制）
-                    Spacer(modifier = Modifier.weight(1f))
-                }
-            }
-
-            // 午休/晚休分隔线
-            if (lunchBreakIndex in 0 until totalSections - 1) {
-                BreakDivider(
-                    text = "午休",
-                    offsetY = rowOffsets[lunchBreakIndex] + sectionHeight.value.toInt()
-                )
-            }
-            if (eveningBreakIndex in 0 until totalSections - 1) {
-                BreakDivider(
-                    text = "晚休",
-                    offsetY = rowOffsets[eveningBreakIndex] + sectionHeight.value.toInt()
-                )
-            }
-
-            // 同天同节次多课程水平平分宽度，避免重叠
-            val grouped = remember(cards) {
-                // key = (day, yStart, height) —— 同天同起止位置的课程归为一组
-                cards.groupBy { (c, y, h) -> Triple(c.dayOfWeek, y, h) }
-            }
-
-            // 绘制课程卡片（绝对定位，跨节撑满高度）
-            grouped.forEach { (key, group) ->
-                val day = key.first
-                if (day !in 1..daysToShow) return@forEach
-                val yOffset = key.second
-                val height = key.third
-                val count = group.size
-                val cellWidth = dayWidth / count   // 同格多课平分宽度
-
-                group.forEachIndexed { idx, (course, _, _) ->
-                    Box(
-                        modifier = Modifier
-                            .width(cellWidth)
-                            .height(height.dp)
-                            .offset(
-                                x = 56.dp + dayWidth * (day - 1) + cellWidth * idx,
-                                y = yOffset.dp
-                            )
-                            .padding(horizontal = 2.dp, vertical = 2.dp)
-                    ) {
-                        CourseCell(
-                            course = course,
-                            spanSections = course.endSection - course.startSection + 1,
-                            colorIndex = courseColorMap[course.name] ?: 0,
-                            onClick = { onCourseClick(course) }
+                        .width(cellWidth)
+                        .height(height.dp)
+                        .offset(
+                            x = dayWidth * (day - 1) + cellWidth * idx,
+                            y = yOffset.dp
                         )
-                    }
+                        .padding(horizontal = 2.dp, vertical = 2.dp)
+                ) {
+                    CourseCell(
+                        course = course,
+                        spanSections = course.endSection - course.startSection + 1,
+                        colorIndex = courseColorMap[course.name] ?: 0,
+                        onClick = { onCourseClick(course) }
+                    )
                 }
             }
         }
