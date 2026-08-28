@@ -48,6 +48,8 @@ data class AppConfig(
     val showWeekends: Boolean = true,
     /** 保留向后兼容：旧版本数据可能携带该字段，新版固定为 12 */
     val totalSections: Int = DEFAULT_TOTAL_SECTIONS,
+    /** 课程提醒提前分钟数：0=关闭（不发任何通知），正值为提前提醒分钟数（预设 5/10/15/30） */
+    val notifyLeadMinutes: Int = 0,
 )
 
 /** 总节数（固定 12 节，硬编码） */

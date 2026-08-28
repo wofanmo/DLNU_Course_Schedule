@@ -4,6 +4,12 @@
     <!-- 教务系统导入需要网络访问；教务系统为 HTTP，需要允许明文流量 -->
     <uses-permission android:name="android.permission.INTERNET" />
 
+    <!-- 课程提醒通知：通知权限（Android 13+ 运行时请求）、精确闹钟（Android 12+）、勿扰访问、开机重排 -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.ACCESS_NOTIFICATION_POLICY" />
+
     <application
             android:allowBackup="true"
             android:usesCleartextTraffic="true"
@@ -32,6 +38,27 @@
             <meta-data
                     android:name="android.appwidget.provider"
                     android:resource="@xml/course_widget_info"/>
+        </receiver>
+
+        <!-- 课程提醒通知：闹钟触发 / 静音按钮 / 恢复铃声 / 开机与时间变更重排 -->
+        <receiver
+                android:name=".notification.ReminderAlarmReceiver"
+                android:exported="false"/>
+        <receiver
+                android:name=".notification.MuteActionReceiver"
+                android:exported="false"/>
+        <receiver
+                android:name=".notification.RestoreReceiver"
+                android:exported="false"/>
+        <receiver
+                android:name=".notification.RescheduleReceiver"
+                android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED"/>
+                <action android:name="android.intent.action.TIME_SET"/>
+                <action android:name="android.intent.action.TIMEZONE_CHANGED"/>
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED"/>
+            </intent-filter>
         </receiver>
     </application>
 

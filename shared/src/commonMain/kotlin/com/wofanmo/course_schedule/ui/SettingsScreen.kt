@@ -243,9 +243,89 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
             }
         }
 
-        // 主题设置
+        // 课程提醒
         item {
             AnimatedListItem(index = 2) {
+                ExpandableSettingItem(
+                    title = "课程提醒",
+                    expanded = expandedSection == "reminder",
+                    onToggle = {
+                        expandedSection = if (expandedSection == "reminder") null else "reminder"
+                    }
+                ) {
+                    val leadOptions = listOf(
+                        0 to "关闭",
+                        5 to "提前 5 分钟",
+                        10 to "提前 10 分钟",
+                        15 to "提前 15 分钟",
+                        30 to "提前 30 分钟",
+                    )
+                    leadOptions.forEach { (value, label) ->
+                        val selected = config.notifyLeadMinutes == value
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable {
+                                    val wasOff = config.notifyLeadMinutes == 0
+                                    config = config.copy(notifyLeadMinutes = value)
+                                    AppSettings.settingsStorage.saveConfig(config)
+                                    if (wasOff && value > 0) requestNotificationPermission()
+                                }
+                                .padding(horizontal = 4.dp, vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            RadioButton(
+                                selected = selected,
+                                onClick = {
+                                    val wasOff = config.notifyLeadMinutes == 0
+                                    config = config.copy(notifyLeadMinutes = value)
+                                    AppSettings.settingsStorage.saveConfig(config)
+                                    if (wasOff && value > 0) requestNotificationPermission()
+                                }
+                            )
+                            Text(
+                                text = label,
+                                fontSize = 16.sp,
+                                fontWeight = if (selected) FontWeight.Medium else FontWeight.Normal,
+                                color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier.padding(start = 8.dp)
+                            )
+                        }
+                    }
+
+                    Spacer(Modifier.height(4.dp))
+
+                    val notifStatus = notificationPermissionStatus()
+                    PermissionRow(
+                        label = "通知权限",
+                        statusText = when (notifStatus) {
+                            PermissionStatus.GRANTED -> "已授权"
+                            PermissionStatus.DENIED -> "未授权，点击授权"
+                            PermissionStatus.NOT_APPLICABLE -> "无需授权"
+                        },
+                        needsGrant = notifStatus == PermissionStatus.DENIED,
+                        onClick = { openNotificationPermissionSettings() },
+                    )
+                    PermissionRow(
+                        label = "闹钟与提醒",
+                        statusText = if (exactAlarmPermissionGranted()) "已授权" else "未授权，点击授权",
+                        needsGrant = !exactAlarmPermissionGranted(),
+                        onClick = { openExactAlarmPermissionSettings() },
+                    )
+                    PermissionRow(
+                        label = "勿扰访问（静音需要）",
+                        statusText = if (dndAccessGranted()) "已授权" else "未授权，点击授权",
+                        needsGrant = !dndAccessGranted(),
+                        onClick = { openDndPermissionSettings() },
+                    )
+                }
+            }
+        }
+
+        // 主题设置
+        item {
+            AnimatedListItem(index = 3) {
                 ExpandableSettingItem(
                     title = "主题",
                     expanded = expandedSection == "theme",
@@ -288,7 +368,7 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
 
         // 关于
         item {
-            AnimatedListItem(index = 3) {
+            AnimatedListItem(index = 4) {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(16.dp),
@@ -297,13 +377,13 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
                 ) {
                     Column(modifier = Modifier.padding(16.dp)) {
                         Text(
-                            text = "关于",
+                            text = "版本",
                             fontSize = 16.sp,
                             style = MaterialTheme.typography.titleMedium
                         )
                         Spacer(modifier = Modifier.height(8.dp))
                         Text(
-                            text = "课程表 v1.0",
+                            text = "民大课程表 v1.1",
                             fontSize = 14.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -311,6 +391,38 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
                 }
             }
         }
+    }
+}
+
+/** 权限状态行：左侧名称，右侧状态文字；未授权时可点击跳转系统设置。 */
+@Composable
+private fun PermissionRow(
+    label: String,
+    statusText: String,
+    needsGrant: Boolean,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .then(
+                if (needsGrant) {
+                    Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable(onClick = onClick)
+                } else Modifier
+            )
+            .padding(vertical = 6.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(text = label, fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurface)
+        Text(
+            text = statusText,
+            fontSize = 13.sp,
+            color = if (needsGrant) MaterialTheme.colorScheme.onSurfaceVariant
+                    else MaterialTheme.colorScheme.primary
+        )
     }
 }
 
