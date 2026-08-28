@@ -131,7 +131,8 @@ object CourseReminderScheduler {
         val location = courses.map { it.location }.filter { it.isNotEmpty() }.joinToString("、")
         val sectionLabel = "第 ${sections.first}-${sections.second} 节"
 
-        val requestCode = ("$kind:$names:$date").hashCode()
+        // 同名课程同天多节次（如周一 1-2 节与 3-4 节同名）时，requestCode 必须区分节次，否则后者覆盖前者
+        val requestCode = ("$kind:$names:$date:${sections.first}-${sections.second}").hashCode()
         val am = context.getSystemService(AlarmManager::class.java)
         val intent = Intent(context, ReminderAlarmReceiver::class.java).apply {
             action = ACTION_ALARM

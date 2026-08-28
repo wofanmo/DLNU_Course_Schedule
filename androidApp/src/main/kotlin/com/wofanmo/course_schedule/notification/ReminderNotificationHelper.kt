@@ -1,5 +1,6 @@
 package com.wofanmo.course_schedule.notification
 
+import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
@@ -43,7 +44,7 @@ object ReminderNotificationHelper {
             .setContentIntent(openAppIntent(context))
             .setAutoCancel(true)
             .build()
-        NotificationManagerCompat.from(context).notify(notificationId, notification)
+        notifyIfAllowed(context, notificationId, notification)
     }
 
     /** 开始通知：带「静音」按钮，点击静音并安排下课自动恢复。 */
@@ -72,7 +73,18 @@ object ReminderNotificationHelper {
             .addAction(muteAction)
             .setAutoCancel(true)
             .build()
-        NotificationManagerCompat.from(context).notify(notificationId, notification)
+        notifyIfAllowed(context, notificationId, notification)
+    }
+
+    /**
+     * Android 13+ 用户拒绝通知权限后 notify() 会抛 SecurityException（闹钟接收器崩溃）；
+     * 发送前先检查通知总开关，未授权时静默跳过。
+     */
+    private fun notifyIfAllowed(context: Context, notificationId: Int, notification: Notification) {
+        val nm = NotificationManagerCompat.from(context)
+        if (nm.areNotificationsEnabled()) {
+            nm.notify(notificationId, notification)
+        }
     }
 
     private fun openAppIntent(context: Context): PendingIntent {

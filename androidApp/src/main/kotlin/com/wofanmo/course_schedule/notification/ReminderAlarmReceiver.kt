@@ -34,7 +34,8 @@ class ReminderAlarmReceiver : BroadcastReceiver() {
         val sectionLabel = intent.getStringExtra(EXTRA_SECTION_LABEL) ?: ""
 
         ReminderNotificationHelper.ensureChannels(context)
-        val notificationId = "$kind:$names".hashCode()
+        // 含节次标签：同名课程同天多节次时通知互不覆盖
+        val notificationId = "$kind:$names:$sectionLabel".hashCode()
 
         if (kind == KIND_PRE) {
             val locationText = if (location.isNotEmpty()) " @ $location" else ""

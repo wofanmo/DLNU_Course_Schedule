@@ -87,7 +87,7 @@ class JinZhiClient(
         viweType: Int,
         semesterId: String,
         campusId: String,
-    ): String = client.get("$baseUrl/xskb/xskb_list.do?viweType=$viweType&needData=1") {
+    ): String = client.get("$baseUrl/xskb/xskb_list.do") {
         url {
             parameters.append("viweType", viweType.toString())
             parameters.append("needData", "1")
