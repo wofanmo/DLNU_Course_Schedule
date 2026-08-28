@@ -15,6 +15,12 @@ dependencies {
 
     implementation(libs.androidx.activity.compose)
 
+    // 桌面小部件（Glance）
+    implementation(libs.androidx.glance.appwidget)
+    // shared 模块的 implementation 依赖不向外传递，widget 直接使用需自行声明
+    implementation(libs.kotlinx.datetime)
+    implementation(libs.kotlinx.coroutines.core)
+
     implementation(libs.compose.uiToolingPreview)
     debugImplementation(libs.compose.uiTooling)
 }

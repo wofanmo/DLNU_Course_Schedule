@@ -1,3 +1,4 @@
 <resources>
     <string name="app_name">课程表</string>
+    <string name="widget_description">显示今日剩余课程及上课时间</string>
 </resources>
