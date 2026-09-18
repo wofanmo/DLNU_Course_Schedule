@@ -82,5 +82,46 @@ fun findConflicts(existing: List<Course>, new: Course): List<Course> {
     }
 }
 
-/** 获取冲突组中节次最靠前的课程名称，用于卡片显示 */
-fun CourseGroup.Conflict.displayName(): String = courses.minByOrNull { it.startSection }?.name ?: courses.first().name
+/**
+ * 冲突组在课表格子上代表显示的课程。
+ *
+ * 优先课（[Course.isPreferred]）优先；同组多门优先课时取起始节次最早的
+ * （组内已按 `(startSection, endSection)` 排序，取首个匹配即可）；无优先课时取起始节次最早的。
+ */
+fun CourseGroup.Conflict.primaryCourse(): Course =
+    courses.firstOrNull { it.isPreferred } ?: courses.first()
+
+/**
+ * 切换 [courseId] 对应课程的「优先显示」标记，返回更新后的课程列表。
+ *
+ * 同一冲突组内只保留一门优先课：标记某门课时，取消该课所在冲突组（按 [week] 计算）内
+ * 其他课程的标记。取消标记时不影响其他课程，组内可回到「无偏好」状态。
+ *
+ * 冲突按周计算，跨周标记仍可能让同一组出现多门优先课，由 [primaryCourse] 的
+ * 「起始节次最早」规则兜底。
+ */
+fun List<Course>.togglePreferred(courseId: String, week: Int): List<Course> {
+    val target = firstOrNull { it.id == courseId } ?: return this
+    val marked = !target.isPreferred
+
+    val groupMateIds = if (marked) {
+        filter { it.matchesWeek(week) }
+            .groupConflictingCourses()
+            .filterIsInstance<CourseGroup.Conflict>()
+            .firstOrNull { group -> group.courses.any { it.id == courseId } }
+            ?.courses
+            ?.map { it.id }
+            ?.toSet()
+            .orEmpty()
+    } else {
+        emptySet()
+    }
+
+    return map { course ->
+        when {
+            course.id == courseId -> course.copy(isPreferred = marked)
+            course.id in groupMateIds -> course.copy(isPreferred = false)
+            else -> course
+        }
+    }
+}

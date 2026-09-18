@@ -65,48 +65,30 @@ class JinZhiClient(
 
     /**
      * 拉取「学期理论课表」页面 HTML。
-     * 用途：读取学期（xnxq01id）与校区/时间模式（kbjcmsid）下拉选项。
-     * 注意：该页的周视图网格在此部署中不承载课程数据，课程数据走 [fetchCourseListJson]。
+     * 用途：读取学期（xnxq01id）下拉选项。
      */
-    suspend fun fetchSchedulePage(semesterId: String? = null, campusId: String? = null): String =
+    suspend fun fetchSchedulePage(semesterId: String? = null): String =
         client.get("$baseUrl/xskb/xskb_list.do") {
             url {
                 parameters.append("viweType", "0")
                 semesterId?.let { parameters.append("xnxq01id", it) }
-                campusId?.let { parameters.append("kbjcmsid", it) }
             }
         }.bodyAsText()
 
     /**
-     * 课程列表 JSON 接口（layui table 数据源）。
-     * [viweType]：1=有课表课程（含时间地点），2=无课表课程。
-     * [campusId] 必填：为空或不匹配的校区会返回空数据。
-     * 必须带 X-Requested-With 与 Accept: application/json 头，否则返回 HTML 页面。
+     * 拉取课表周视图页面 HTML（课程数据的唯一来源）。
+     * 服务端按 [week] 过滤网格，需遍历全部周次才能拿到完整课程；
+     * 校区由服务端按登录身份决定，故 kbjcmsid 传空。
      */
-    suspend fun fetchCourseListJson(
-        viweType: Int,
-        semesterId: String,
-        campusId: String,
-    ): String = client.get("$baseUrl/xskb/xskb_list.do") {
-        url {
-            parameters.append("viweType", viweType.toString())
-            parameters.append("needData", "1")
-            parameters.append("demoStr", "")
-            parameters.append("baseUrl", "/jsxsd")
-            parameters.append("sfykb", "2")
-            parameters.append(
-                "xsflMapListJsonStr",
-                "讲课学时,实践学时,课外学时,实验学时,上机学时,讨论辅导学时,设计作业总学时,"
-            )
-            parameters.append("xnxq01id", semesterId)
-            parameters.append("zc", "")
-            parameters.append("kbjcmsid", campusId)
-            parameters.append("pageNum", "1")
-            parameters.append("pageSize", "500")
-        }
-        headers.append("X-Requested-With", "XMLHttpRequest")
-        headers.append("Accept", "application/json, text/javascript, */*; q=0.01")
-    }.bodyAsText()
+    suspend fun fetchScheduleGrid(semesterId: String, week: Int): String =
+        client.get("$baseUrl/$SCHEDULE_GRID_PATH") {
+            url {
+                parameters.append("zc", week.toString())
+                parameters.append("kbjcmsid", "")
+                parameters.append("xnxq01id", semesterId)
+                parameters.append("xswk", "false")
+            }
+        }.bodyAsText()
 
     /** 学期的起止周（用于确定课表总周数）；失败返回 null */
     suspend fun fetchSemesterTotalWeeks(semesterId: String): Int? = runCatching {
@@ -120,6 +102,15 @@ class JinZhiClient(
 
     companion object {
         const val DEFAULT_BASE_URL = "http://jwxt.dlnu.edu.cn/jsxsd"
+
+        /**
+         * 课表周视图页面路径。
+         *
+         * 教务系统改版后课程数据只从这里返回：旧 JSON 接口
+         * `xskb/xskb_list.do?viweType=1` 已改为返回空数据。
+         * 路径末尾的 `12026` 是教务系统的菜单 ID，若学校调整菜单需同步更新。
+         */
+        private const val SCHEDULE_GRID_PATH = "framework/mainV_index_loadkb_12026.htmlx"
 
         @OptIn(ExperimentalEncodingApi::class)
         private fun b64(text: String): String = Base64.encode(text.encodeToByteArray())

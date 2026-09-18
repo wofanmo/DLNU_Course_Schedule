@@ -4,133 +4,220 @@ import com.wofanmo.course_schedule.data.jwgl.JinZhiParser
 import com.wofanmo.course_schedule.data.model.WeekParity
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 
 /**
- * 基于大连民族大学金智系统真实数据格式的解析器回归测试
+ * 基于大连民族大学教务系统真实页面结构的解析器回归测试
  */
 class JinZhiParserTest {
 
+    /** 课程单元格：外层 li.courselists-item + 内层 qz-tooltip（后者不应被解析成课程） */
+    private fun courseCell(
+        name: String,
+        teacher: String,
+        sections: String,
+        weeksAndDay: String,
+        location: String,
+    ) = """
+        <td rowspan="2" class="qz-weeklyTable-td qz-hasCourse qz-mixrow" width="13%">
+            <div class="td-cell qz-flex-col">
+                <ul class="courselists qz-flex-col hasMoreCourse">
+                    <li class="courselists-item qz-hasCourse-1">
+                        <div class="qz-hasCourse-title qz-ellipse">$name</div>
+                        <div class="qz-hasCourse-detaillists">
+                            <div class="qz-hasCourse-detailitem" style="display:none;"></div>
+                            <div class="qz-hasCourse-detailitem qz-FullInfo">
+                                教师：$teacher
+                                <br>课序号：05
+                            </div>
+                            <div class="qz-hasCourse-detailitem qz-FullInfo">$sections</div>
+                            <div class="qz-hasCourse-detailitem qz-FullInfo">$weeksAndDay</div>
+                            <div class="qz-hasCourse-detailitem">$location</div>
+                            <div class="qz-default qz-showlink qz-FullInfo" style="display:none;" name="wkxx"></div>
+                        </div>
+                    </li>
+                </ul>
+                <div class="qz-tooltip">
+                    <div class="qz-tooltipContent">
+                        <ul class="qz-toolitiplists">
+                            <li class="qz-toolitiplists">
+                                <div class="qz-tooltipContent-title qz-ellipse">$name</div>
+                                <div class="qz-tooltipContent-detaillists">
+                                    <div class="qz-tooltipContent-detailitem">教师：$teacher<br> 课序号：05</div>
+                                    <div class="qz-tooltipContent-detailitem">上课地点：$location</div>
+                                    <div class="qz-tooltipContent-detailitem">周次：$weeksAndDay</div>
+                                    <div class="qz-tooltipContent-detailitem">节次：$sections</div>
+                                    <div class="qz-tooltipContent-detailitem">学分：3.5学分</div>
+                                </div>
+                            </li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </td>
+    """.trimIndent()
+
     @Test
-    fun parsesMultiSegmentWeeks() {
-        // 计算机组成原理（2025-2026-2 真实格式）：非连续周段 3-13,17-18
-        val json = """
-            {"code":0,"data":[{
-              "kc_mc":"计算机组成原理","jg0101mc":"包书哲",
-              "sktime":"周一第3、4节{第3-13,17-18周}(全部);周三第3、4节{第4-13,17周}(全部)",
-              "skddmc":"致新楼西区-204;致新楼西区-318"
-            }],"count":1}
-        """.trimIndent()
+    fun parsesCourseCellFields() {
+        val html = courseCell(
+            name = "离散数学",
+            teacher = "赵戈讲师（高校）",
+            sections = "01~02节",
+            weeksAndDay = "[1-5周] 星期三",
+            location = "致新楼致新楼西区-322",
+        )
 
-        val courses = JinZhiParser.parseTimedCourses(json)
-        // 周一 3-4节 {3-13} + {17-18}，周三 3-4节 {4-13} + {17} → 4 条
-        assertEquals(4, courses.size)
+        val courses = JinZhiParser.parseScheduleGrid(html)
+        assertEquals(1, courses.size)
 
-        val monday = courses.filter { it.dayOfWeek == 1 }
-        assertEquals(2, monday.size)
-        assertEquals(setOf(3 to 13, 17 to 18), monday.map { it.startWeek to it.endWeek }.toSet())
-        assertEquals(3, monday.first().startSection)
-        assertEquals(4, monday.first().endSection)
-        assertEquals("致新楼西区-204", monday.first().location)
+        val c = courses.first()
+        assertEquals("离散数学", c.name)
+        assertEquals("赵戈讲师（高校）", c.teacher)
+        assertEquals(1, c.startSection)
+        assertEquals(2, c.endSection)
+        assertEquals(3, c.dayOfWeek)          // 星期三
+        assertEquals(1, c.startWeek)
+        assertEquals(5, c.endWeek)
+        assertEquals(WeekParity.EVERY, c.weekParity)
+    }
 
-        val wednesday = courses.filter { it.dayOfWeek == 3 }
-        assertEquals(setOf(4 to 13, 17 to 17), wednesday.map { it.startWeek to it.endWeek }.toSet())
-        assertEquals("致新楼西区-318", wednesday.first().location)
-        assertEquals(WeekParity.EVERY, courses.first().weekParity)
+    @Test
+    fun expandsMultiSegmentWeeks() {
+        // [1-5,8-14,18周] → 三个周段各一条记录
+        val html = courseCell(
+            name = "离散数学",
+            teacher = "赵戈讲师（高校）",
+            sections = "01~02节",
+            weeksAndDay = "[1-5,8-14,18周] 星期三",
+            location = "致新楼致新楼西区-322",
+        )
+
+        val courses = JinZhiParser.parseScheduleGrid(html)
+        assertEquals(3, courses.size)
+        assertEquals(
+            setOf(1 to 5, 8 to 14, 18 to 18),
+            courses.map { it.startWeek to it.endWeek }.toSet(),
+        )
+    }
+
+    @Test
+    fun parsesSectionRangeAndOddSections() {
+        val html = courseCell(
+            name = "自然语言处理",
+            teacher = "赵丹丹副教授",
+            sections = "07~08节",
+            weeksAndDay = "[4-5,7-10周] 星期四",
+            location = "致新楼致新楼西区-104",
+        )
+
+        val c = JinZhiParser.parseScheduleGrid(html).first()
+        assertEquals(7, c.startSection)
+        assertEquals(8, c.endSection)
+        assertEquals(4, c.dayOfWeek)
     }
 
     @Test
     fun parsesScatteredSingleWeeks() {
-        // IT认证1（2026-2027-1 真实格式）：第4,7周 两个孤立周
-        val json = """
-            {"code":0,"data":[{
-              "kc_mc":"IT认证1","jg0101mc":"赵戈,邓新洋,崔永瑞",
-              "sktime":"周六第5、6节{第4,7周}(全部)",
-              "skddmc":"致新楼东区-324"
-            }],"count":1}
-        """.trimIndent()
+        // [4,7周] → 两个孤立周
+        val html = courseCell(
+            name = "IT认证1",
+            teacher = "邓新洋讲师（高校）",
+            sections = "05~06节",
+            weeksAndDay = "[4,7周] 星期六",
+            location = "致新楼致新楼东区-324",
+        )
 
-        val courses = JinZhiParser.parseTimedCourses(json)
+        val courses = JinZhiParser.parseScheduleGrid(html)
         assertEquals(2, courses.size)
-        assertEquals(6, courses.first().dayOfWeek)
         assertEquals(setOf(4, 7), courses.map { it.startWeek }.toSet())
-        assertEquals(setOf(4, 7), courses.map { it.endWeek }.toSet())
+        assertEquals(6, courses.first().dayOfWeek)
     }
 
     @Test
-    fun parsesSectionRangeSyntax() {
-        // 数据库原理与应用（2025-2026-2 真实格式）：节次区间写法 第5-8节
-        val json = """
-            {"code":0,"data":[{
-              "kc_mc":"数据库原理与应用","jg0101mc":"某教师",
-              "sktime":"周日第5-8节{第4周}(全部);周日第5-8节{第5,7周}(全部)",
-              "skddmc":"致新楼西区-101;致新楼西区-101"
-            }],"count":1}
+    fun dedupesRepeatedLocationPrefix() {
+        // 教务系统把建筑名重复拼了一遍
+        val html = courseCell(
+            name = "Web前端开发技术",
+            teacher = "邓新洋讲师（高校）",
+            sections = "07~08节",
+            weeksAndDay = "[4,7-12周] 星期五",
+            location = "弘德楼A区弘德楼A区-301",
+        )
+
+        assertEquals("弘德楼A区-301", JinZhiParser.parseScheduleGrid(html).first().location)
+    }
+
+    @Test
+    fun keepsNormalLocationUnchanged() {
+        val html = courseCell(
+            name = "示例课",
+            teacher = "某教师",
+            sections = "01~02节",
+            weeksAndDay = "[1-4周] 星期一",
+            location = "致新楼西区-204",
+        )
+
+        assertEquals("致新楼西区-204", JinZhiParser.parseScheduleGrid(html).first().location)
+    }
+
+    @Test
+    fun stripsCourseSequenceSuffixFromTeacher() {
+        val html = courseCell(
+            name = "计算机网络",
+            teacher = "王泽宇讲师（高校）",
+            sections = "01~02节",
+            weeksAndDay = "[4-5,7-17周] 星期四",
+            location = "致新楼致新楼西区-322",
+        )
+
+        // 「教师：王泽宇讲师（高校） <br>课序号：02」不应把课序号并入教师名
+        assertEquals("王泽宇讲师（高校）", JinZhiParser.parseScheduleGrid(html).first().teacher)
+    }
+
+    @Test
+    fun parsesUntimedCoursesFromRemarkRow() {
+        val html = """
+            <tfoot class="qz-weeklyTable-tfoot">
+            <tr class="qz-weeklyTable-tr">
+                <td class="qz-weeklyTable-td qz-weeklyTable-label" width="122px">
+                    <div class="td-cell qz-ellipse qz-flex-col">
+                        <div class="index-title">备注</div>
+                    </div>
+                </td>
+                <td class="qz-weeklyTable-td qz-weeklyTable-detailtext" colspan="7" width="91%">
+                    <div class="td-cell">
+                        劳动教育与训练5 刘通 1-20周;IT职业素质训练（校企合作） 邓新洋 1-3周;
+                    </div>
+                </td>
+            </tr>
+            </tfoot>
         """.trimIndent()
 
-        val courses = JinZhiParser.parseTimedCourses(json)
-        assertEquals(3, courses.size)
-        assertEquals(7, courses.first().dayOfWeek)
-        assertEquals(5, courses.first().startSection)
-        assertEquals(8, courses.first().endSection)
-        assertEquals(setOf(4, 5, 7), courses.map { it.startWeek }.toSet())
+        assertEquals(
+            listOf("劳动教育与训练5" to "刘通", "IT职业素质训练（校企合作）" to "邓新洋"),
+            JinZhiParser.parseUntimedCourses(html),
+        )
     }
 
     @Test
-    fun parsesOddEvenParity() {
-        val json = """
-            {"code":0,"data":[{
-              "kc_mc":"示例课","jg0101mc":"某教师",
-              "sktime":"周二第1、2节{第1-15周}(单周);周四第1、2节{第1-15周}(双周)",
-              "skddmc":"教一楼-101;教一楼-102"
-            }],"count":1}
-        """.trimIndent()
-
-        val courses = JinZhiParser.parseTimedCourses(json)
-        assertEquals(2, courses.size)
-        assertEquals(WeekParity.ODD, courses[0].weekParity)
-        assertEquals(WeekParity.EVEN, courses[1].weekParity)
-        assertEquals(2, courses[0].dayOfWeek)
-        assertEquals(4, courses[1].dayOfWeek)
-    }
-
-    @Test
-    fun untimedEntriesComeFromNullSktime() {
-        val json = """
-            {"code":0,"data":[
-              {"kc_mc":"劳动教育与训练5","jg0101mc":"刘通","sktime":null},
-              {"kc_mc":"计算机组成原理","jg0101mc":"包书哲","sktime":"周一第3、4节{第3-13周}(全部)"}
-            ],"count":2}
-        """.trimIndent()
-
-        val entries = JinZhiParser.parseUntimedEntries(json)
-        assertEquals(listOf("劳动教育与训练5" to "刘通"), entries)
-    }
-
-    @Test
-    fun parsesSemesterAndCampusOptionsFromPage() {
+    fun parsesSemesterOptionsFromPage() {
         val html = """
             <html><body>
             <select id="xnxq01id" name="xnxq01id">
               <option value="2026-2027-2">2026-2027-2</option>
               <option value="2026-2027-1" selected="selected">2026-2027-1</option>
             </select>
-            <select id="kbjcmsid" name="kbjcmsid">
-              <option value="KFQ" selected="selected">开发区校区</option>
-              <option value="JST">金石滩校区</option>
-            </select>
             </body></html>
         """.trimIndent()
 
-        val page = JinZhiParser.parse(html)
-        assertEquals(2, page.semesters.size)
-        assertEquals("2026-2027-1", page.semesters.first { it.isCurrent }.id)
-        assertEquals(listOf("开发区校区", "金石滩校区"), page.campuses.map { it.name })
-        assertEquals(listOf("KFQ", "JST"), page.campuses.map { it.id })
+        val semesters = JinZhiParser.parse(html)
+        assertEquals(2, semesters.size)
+        assertEquals("2026-2027-1", semesters.first { it.isCurrent }.id)
     }
 
     @Test
-    fun emptyDataYieldsEmpty() {
-        assertEquals(emptyList(), JinZhiParser.parseTimedCourses("""{"code":0,"data":[],"count":0}"""))
-        assertEquals(emptyList(), JinZhiParser.parseUntimedEntries("not json"))
+    fun emptyOrUnrelatedHtmlYieldsEmpty() {
+        assertTrue(JinZhiParser.parseScheduleGrid("<html><body>请先登录系统</body></html>").isEmpty())
+        assertTrue(JinZhiParser.parseUntimedCourses("<html><body></body></html>").isEmpty())
     }
 }

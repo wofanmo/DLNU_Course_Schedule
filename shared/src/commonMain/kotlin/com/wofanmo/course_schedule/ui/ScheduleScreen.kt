@@ -2,12 +2,14 @@ package com.wofanmo.course_schedule.ui
 
 import androidx.compose.animation.*
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -38,6 +40,8 @@ import com.wofanmo.course_schedule.data.model.matchesWeek
 import com.wofanmo.course_schedule.data.model.totalSectionCount
 import com.wofanmo.course_schedule.data.model.CourseGroup
 import com.wofanmo.course_schedule.data.model.groupConflictingCourses
+import com.wofanmo.course_schedule.data.model.primaryCourse
+import com.wofanmo.course_schedule.data.model.togglePreferred
 import com.wofanmo.course_schedule.ui.theme.CourseColorPalette
 import kotlin.math.abs
 
@@ -70,6 +74,20 @@ fun ScheduleScreen(modifier: Modifier = Modifier) {
 
     // 冲突课程详情弹窗状态
     var selectedConflict by remember { mutableStateOf<CourseGroup.Conflict?>(null) }
+
+    // 切换课程的「冲突时优先显示」标记并落库（同组互斥规则见 togglePreferred 纯函数）。
+    // 弹窗持有的是课程快照，落库后按 id 重新取一遍，否则要等课表重载才反映新状态。
+    fun togglePreferredAndSave(course: Course) {
+        val current = schedule ?: return
+        val saved = current.copy(courses = current.courses.togglePreferred(course.id, currentWeek))
+        AppSettings.scheduleStorage.save(saved)
+
+        val byId = saved.courses.associateBy { it.id }
+        selectedCourse = selectedCourse?.let { byId[it.id] }
+        selectedConflict = selectedConflict?.let { group ->
+            CourseGroup.Conflict(group.courses.mapNotNull { byId[it.id] })
+        }
+    }
 
     Column(
         modifier = modifier.fillMaxSize()
@@ -280,6 +298,7 @@ fun ScheduleScreen(modifier: Modifier = Modifier) {
             course = course,
             week = currentWeek,
             sectionTimes = DEFAULT_SECTION_TIMES,
+            onTogglePreferred = { togglePreferredAndSave(course) },
             onDismiss = { selectedCourse = null }
         )
     }
@@ -289,6 +308,7 @@ fun ScheduleScreen(modifier: Modifier = Modifier) {
         ConflictCourseSheet(
             conflict = conflict,
             sectionTimes = DEFAULT_SECTION_TIMES,
+            onTogglePreferred = ::togglePreferredAndSave,
             onDismiss = { selectedConflict = null }
         )
     }
@@ -604,7 +624,7 @@ private fun CourseCardArea(
                             .padding(horizontal = 2.dp, vertical = 2.dp)
                     ) {
                         ConflictCourseCard(
-                            courses = courses,
+                            conflict = group,
                             spanSections = maxEnd - minStart + 1,
                             onClick = { onConflictClick(group) }
                         )
@@ -676,18 +696,20 @@ fun CourseCell(course: Course, spanSections: Int, colorIndex: Int = 0, onClick: 
 }
 
 /**
- * 冲突课程聚合卡片：显示第一门课名 + 右上角数量角标。
+ * 冲突课程聚合卡片：显示代表课程名 + 右上角数量角标。
+ * 代表课程由 [primaryCourse] 决定（优先课优先，否则起始节次最早）。
  * 使用 errorContainer 颜色以与普通课程卡片区分。
  */
 @Composable
 private fun ConflictCourseCard(
-    courses: List<Course>,
+    conflict: CourseGroup.Conflict,
     spanSections: Int,
     onClick: () -> Unit,
 ) {
     val backgroundColor = MaterialTheme.colorScheme.errorContainer
     val contentColor = MaterialTheme.colorScheme.onErrorContainer
     val singleSection = spanSections <= 1
+    val primary = conflict.primaryCourse()
 
     Surface(
         onClick = onClick,
@@ -698,7 +720,7 @@ private fun ConflictCourseCard(
         tonalElevation = 0.dp
     ) {
         Box(modifier = Modifier.fillMaxSize()) {
-            // 主内容：第一门课名（按起始节次排序）
+            // 主内容：代表课程名与地点
             Column(
                 modifier = Modifier
                     .fillMaxSize()
@@ -707,7 +729,7 @@ private fun ConflictCourseCard(
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 Text(
-                    text = courses.first().name,
+                    text = primary.name,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Bold,
                     color = contentColor,
@@ -719,7 +741,7 @@ private fun ConflictCourseCard(
                 if (!singleSection) {
                     Spacer(modifier = Modifier.height(2.dp))
                     Text(
-                        text = courses.first().location,
+                        text = primary.location,
                         fontSize = 9.sp,
                         color = contentColor.copy(alpha = 0.7f),
                         maxLines = 1,
@@ -742,7 +764,7 @@ private fun ConflictCourseCard(
             ) {
                 Box(contentAlignment = Alignment.Center) {
                     Text(
-                        text = courses.size.toString(),
+                        text = conflict.courses.size.toString(),
                         fontSize = 10.sp,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.onError,
@@ -757,13 +779,15 @@ private fun ConflictCourseCard(
 
 /**
  * 冲突课程详情底部弹窗：展示所有冲突课程的详细信息。
- * 每门课保留各自的原始色带，课程间用分割线隔开。
+ * 点击课程卡片即把它设为「优先显示」—— 该课成为课表格子上冲突卡的代表课程。
+ * 组内同时只允许一门优先课（标记新课时自动取消同组其他课），再次点击已选中的课可取消。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ConflictCourseSheet(
     conflict: CourseGroup.Conflict,
     sectionTimes: List<com.wofanmo.course_schedule.data.model.SectionTime>,
+    onTogglePreferred: (Course) -> Unit,
     onDismiss: () -> Unit,
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -789,8 +813,15 @@ private fun ConflictCourseSheet(
                 modifier = Modifier.padding(horizontal = 20.dp, vertical = 16.dp)
             )
 
-            // 课程详情卡片列表
-            conflict.courses.forEachIndexed { index, course ->
+            Text(
+                text = "选择课表卡片上显示哪门课（仅可选一门），再次点击已选中的课可取消",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 20.dp).padding(bottom = 8.dp)
+            )
+
+            // 课程详情卡片列表（点击切换优先标记）
+            conflict.courses.forEach { course ->
                 val accentColor = if (course.color.isNotEmpty()) {
                     parseColor(course.color)
                         ?: CourseColorPalette[abs(course.name.hashCode()) % CourseColorPalette.size]
@@ -798,52 +829,76 @@ private fun ConflictCourseSheet(
                     CourseColorPalette[abs(course.name.hashCode()) % CourseColorPalette.size]
                 }
 
-                // 课程色带（保留原始颜色）
-                Box(
+                Surface(
+                    onClick = { onTogglePreferred(course) },
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 20.dp)
-                        .height(4.dp)
-                        .background(accentColor, RoundedCornerShape(topStart = 4.dp, topEnd = 4.dp))
-                )
-
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 20.dp, vertical = 12.dp)
+                        .padding(horizontal = 20.dp, vertical = 6.dp),
+                    shape = RoundedCornerShape(12.dp),
+                    color = if (course.isPreferred) {
+                        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
+                    } else {
+                        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.30f)
+                    },
+                    border = if (course.isPreferred) {
+                        BorderStroke(1.5.dp, MaterialTheme.colorScheme.primary)
+                    } else {
+                        null
+                    },
+                    tonalElevation = 0.dp
                 ) {
-                    Text(
-                        text = course.name,
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    DetailRow(icon = "📚", label = "节次", value = "第${course.startSection}-${course.endSection}节")
-                    DetailRow(icon = "👨‍🏫", label = "教师", value = course.teacher)
-                    DetailRow(icon = "📍", label = "地点", value = course.location)
-
-                    val startTime = sectionTimes.getOrNull(course.startSection - 1)
-                    if (startTime != null) {
-                        Spacer(Modifier.height(4.dp))
-                        DetailRow(
-                            icon = "⏰",
-                            label = "时间",
-                            value = "${startTime.start} - ${
-                                sectionTimes.getOrNull(course.endSection - 1)?.end ?: ""
-                            }"
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        // 课程色带（保留原始颜色）
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(4.dp)
+                                .background(accentColor)
                         )
-                    }
-                }
 
-                // 课程间分割线
-                if (index < conflict.courses.size - 1) {
-                    HorizontalDivider(
-                        modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp),
-                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
-                    )
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 14.dp, vertical = 12.dp)
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    text = course.name,
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                if (course.isPreferred) {
+                                    Spacer(Modifier.width(6.dp))
+                                    Icon(
+                                        imageVector = Icons.Filled.CheckCircle,
+                                        contentDescription = "优先显示",
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                            }
+                            Spacer(Modifier.height(8.dp))
+                            DetailRow(icon = "📚", label = "节次", value = "第${course.startSection}-${course.endSection}节")
+                            DetailRow(icon = "👨‍🏫", label = "教师", value = course.teacher)
+                            DetailRow(icon = "📍", label = "地点", value = course.location)
+
+                            val startTime = sectionTimes.getOrNull(course.startSection - 1)
+                            if (startTime != null) {
+                                Spacer(Modifier.height(4.dp))
+                                DetailRow(
+                                    icon = "⏰",
+                                    label = "时间",
+                                    value = "${startTime.start} - ${
+                                        sectionTimes.getOrNull(course.endSection - 1)?.end ?: ""
+                                    }"
+                                )
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -891,6 +946,7 @@ private fun CourseDetailSheet(
     course: Course,
     week: Int,
     sectionTimes: List<com.wofanmo.course_schedule.data.model.SectionTime>,
+    onTogglePreferred: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -958,6 +1014,35 @@ private fun CourseDetailSheet(
                 }
 
                 Spacer(Modifier.height(16.dp))
+
+                // 冲突时优先显示开关：也是「标记了却不再冲突」时的清除出口
+                HorizontalDivider(
+                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+                )
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "冲突时优先显示",
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            text = "与其他课程时间冲突时，课表卡片显示本课程",
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(
+                        checked = course.isPreferred,
+                        onCheckedChange = { onTogglePreferred() }
+                    )
+                }
             }
         }
     }

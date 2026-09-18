@@ -23,6 +23,8 @@ data class Course(
     /** 精确周次列表（手动添加时可为任意周）；为空时用 startWeek..endWeek + weekParity 计算 */
     val weeks: List<Int> = emptyList(),
     val color: String = "",
+    /** 与其他课程时间冲突时，课表格子上的冲突卡优先显示本课程。见 [CourseGroup.Conflict.primaryCourse] */
+    val isPreferred: Boolean = false,
 )
 
 /** 课程是否在指定周上课（兼容 weeks 列表与范围+单双周两种模式） */

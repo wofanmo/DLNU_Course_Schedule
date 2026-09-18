@@ -46,7 +46,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import com.wofanmo.course_schedule.AppSettings
-import com.wofanmo.course_schedule.data.jwgl.CampusOption
 import com.wofanmo.course_schedule.data.jwgl.JinZhiClient
 import com.wofanmo.course_schedule.data.jwgl.JinZhiParser
 import com.wofanmo.course_schedule.data.jwgl.ParsedCourse
@@ -69,6 +68,9 @@ private fun Throwable.fullChain(): String =
     generateSequence(this) { it.cause }
         .joinToString(" ← ") { "${it::class.simpleName}: ${it.message}" }
 
+/** 学期总周数取不到时的兜底值（课表周视图需按周遍历，必须有一个上界） */
+private const val DEFAULT_TOTAL_WEEKS = 20
+
 /** 导入流程的各个步骤 */
 private sealed interface ImportStep {
     data object Login : ImportStep
@@ -84,8 +86,8 @@ private sealed interface ImportStep {
 
 /**
  * 教务系统导入（全屏覆盖层）：
- * 登录 → 选择学期 → 遍历两校区抓取 → 确认开学日期 → 生成新课表快照。
- * 路线与语义见 docs/adr/0001、0002。
+ * 登录 → 选择学期 → 抓取 → 确认开学日期 → 生成新课表快照。
+ * 路线与语义见 docs/adr/0001、0002、0005。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -101,8 +103,7 @@ fun ImportScreen(onClose: () -> Unit) {
     var username by remember { mutableStateOf(savedAccount?.username ?: "") }
     var password by remember { mutableStateOf(savedAccount?.password ?: "") }
 
-    // 学期与校区（登录成功后填充）
-    var campuses by remember { mutableStateOf<List<CampusOption>>(emptyList()) }
+    // 学期（登录成功后填充）
     var selectedSemesterId by remember { mutableStateOf("") }
     var scheduleName by remember { mutableStateOf("") }
 
@@ -135,17 +136,16 @@ fun ImportScreen(onClose: () -> Unit) {
                 }
                 step = ImportStep.Working("正在获取学期信息…")
                 JinZhiParser.parse(client.fetchSchedulePage())
-            }.onSuccess { page ->
-                if (page.semesters.isEmpty()) {
+            }.onSuccess { semesters ->
+                if (semesters.isEmpty()) {
                     step = ImportStep.Failed("未在课表页找到学期信息，教务系统页面可能已变更")
                     return@onSuccess
                 }
-                campuses = page.campuses
-                val current = page.semesters.firstOrNull { it.isCurrent }
-                    ?: page.semesters.first()
+                val current = semesters.firstOrNull { it.isCurrent }
+                    ?: semesters.first()
                 selectedSemesterId = current.id
                 scheduleName = "${current.label} 教务导入"
-                step = ImportStep.PickSemester(page.semesters)
+                step = ImportStep.PickSemester(semesters)
             }.onFailure { e ->
                 step = ImportStep.Failed("登录失败：${e.fullChain()}")
             }
@@ -153,31 +153,32 @@ fun ImportScreen(onClose: () -> Unit) {
     }
 
     fun startImport() {
-        if (campuses.isEmpty()) {
-            step = ImportStep.Failed("未能获取校区列表，教务系统页面可能已变更")
-            return
-        }
         scope.launch {
-            step = ImportStep.Working("正在抓取课表…")
             runCatching {
+                step = ImportStep.Working("正在获取学期信息…")
+                val totalWeeks = client.fetchSemesterTotalWeeks(selectedSemesterId)
+                    ?: DEFAULT_TOTAL_WEEKS
                 val allCourses = mutableListOf<ParsedCourse>()
-                val untimedNames = mutableListOf<Pair<String, String>>() // 课程名 to 教师
-                // 学生只属于一个校区：列表接口的校区参数必填，非本校区返回空，遍历两校区后合并
-                for (campus in campuses) {
-                    val timedJson = client.fetchCourseListJson(1, selectedSemesterId, campus.id)
-                    allCourses += JinZhiParser.parseTimedCourses(timedJson)
-                    val untimedJson = client.fetchCourseListJson(2, selectedSemesterId, campus.id)
-                    untimedNames += JinZhiParser.parseUntimedEntries(untimedJson)
+                val untimedEntries = mutableListOf<Pair<String, String>>() // 课程名 to 教师
+                // 周视图按周过滤，课程单元格自带完整周次范围：遍历全部周次后合并去重
+                for (week in 1..totalWeeks) {
+                    step = ImportStep.Working("正在抓取课表…（第 $week/$totalWeeks 周）")
+                    val html = client.fetchScheduleGrid(selectedSemesterId, week)
+                    allCourses += JinZhiParser.parseScheduleGrid(html)
+                    untimedEntries += JinZhiParser.parseUntimedCourses(html)
                 }
-                // 无课表名单在此部署中含全部选课记录，需剔除已有定时记录的课程
+                // 备注行含全部选课记录，需剔除已有定时记录的课程
                 val timedKeys = allCourses.map { it.name to it.teacher }.toSet()
-                val deduped = allCourses.distinct()
-                val untimedOnly = untimedNames.distinct()
+                val untimedOnly = untimedEntries.distinct()
                     .filter { it !in timedKeys }
                     .map { it.first }
                     .distinct()
-                Triple(deduped, untimedOnly, client.fetchSemesterTotalWeeks(selectedSemesterId))
+                Triple(allCourses.distinct(), untimedOnly, totalWeeks)
             }.onSuccess { (courses, untimed, totalWeeks) ->
+                if (courses.isEmpty()) {
+                    step = ImportStep.Failed("未能从课表页解析到课程，教务系统页面可能已变更")
+                    return@onSuccess
+                }
                 semesterTotalWeeks = totalWeeks
                 step = ImportStep.ConfirmStartDate(courses, untimed)
             }.onFailure { e ->
