@@ -383,7 +383,7 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
                         )
                         Spacer(modifier = Modifier.height(8.dp))
                         Text(
-                            text = "课程表 v1.0.0",
+                            text = "课程表 v1.1.0",
                             fontSize = 14.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )

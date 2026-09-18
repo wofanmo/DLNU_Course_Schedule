@@ -53,8 +53,8 @@ import com.wofanmo.course_schedule.AppSettings
 import com.wofanmo.course_schedule.data.model.Course
 import com.wofanmo.course_schedule.data.model.Schedule
 import com.wofanmo.course_schedule.data.model.WeekParity
-import com.wofanmo.course_schedule.data.model.matchesWeek
 import com.wofanmo.course_schedule.data.model.newId
+import com.wofanmo.course_schedule.data.model.findConflicts
 import kotlinx.datetime.Clock
 import kotlinx.datetime.DateTimeUnit
 import kotlinx.datetime.TimeZone
@@ -62,23 +62,6 @@ import kotlinx.datetime.minus
 import kotlinx.datetime.toLocalDateTime
 
 private val DAY_NAMES = listOf("周一", "周二", "周三", "周四", "周五", "周六", "周日")
-
-/**
- * 时间冲突检测：同星期、节次区间相交、周次有交集（兼容 weeks 列表与范围+单双周）。
- * 若新课程定义了精确周列表，则只检查这些周是否与已有课程重合。
- */
-private fun findConflicts(existing: List<Course>, new: Course): List<Course> {
-    val newWeeks = if (new.weeks.isNotEmpty()) {
-        new.weeks
-    } else {
-        (new.startWeek..new.endWeek).toList()
-    }
-    return existing.filter { c ->
-        c.dayOfWeek == new.dayOfWeek &&
-            c.startSection <= new.endSection && new.startSection <= c.endSection &&
-            newWeeks.any { week -> c.matchesWeek(week) }
-    }
-}
 
 /**
  * 手动添加课程（全屏覆盖层）。课程写入当前课表；时间冲突直接禁止保存。

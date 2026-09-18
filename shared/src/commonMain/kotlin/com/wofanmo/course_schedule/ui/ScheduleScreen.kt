@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -35,6 +36,8 @@ import com.wofanmo.course_schedule.data.model.eveningBreakIndex
 import com.wofanmo.course_schedule.data.model.lunchBreakIndex
 import com.wofanmo.course_schedule.data.model.matchesWeek
 import com.wofanmo.course_schedule.data.model.totalSectionCount
+import com.wofanmo.course_schedule.data.model.CourseGroup
+import com.wofanmo.course_schedule.data.model.groupConflictingCourses
 import com.wofanmo.course_schedule.ui.theme.CourseColorPalette
 import kotlin.math.abs
 
@@ -64,6 +67,9 @@ fun ScheduleScreen(modifier: Modifier = Modifier) {
 
     // 课程详情弹窗状态
     var selectedCourse by remember { mutableStateOf<Course?>(null) }
+
+    // 冲突课程详情弹窗状态
+    var selectedConflict by remember { mutableStateOf<CourseGroup.Conflict?>(null) }
 
     Column(
         modifier = modifier.fillMaxSize()
@@ -243,7 +249,8 @@ fun ScheduleScreen(modifier: Modifier = Modifier) {
                                     rowOffsets = rowOffsets,
                                     sectionHeight = sectionHeight,
                                     totalGridHeight = totalGridHeight,
-                                    onCourseClick = { selectedCourse = it }
+                                    onCourseClick = { selectedCourse = it },
+                                    onConflictClick = { selectedConflict = it }
                                 )
                             }
                         }
@@ -274,6 +281,15 @@ fun ScheduleScreen(modifier: Modifier = Modifier) {
             week = currentWeek,
             sectionTimes = DEFAULT_SECTION_TIMES,
             onDismiss = { selectedCourse = null }
+        )
+    }
+
+    // 冲突课程详情底部弹窗
+    selectedConflict?.let { conflict ->
+        ConflictCourseSheet(
+            conflict = conflict,
+            sectionTimes = DEFAULT_SECTION_TIMES,
+            onDismiss = { selectedConflict = null }
         )
     }
 
@@ -512,6 +528,7 @@ private fun CourseCardArea(
     sectionHeight: Dp,
     totalGridHeight: Int,
     onCourseClick: (Course) -> Unit,
+    onConflictClick: (CourseGroup.Conflict) -> Unit,
 ) {
     // 预计算本周课程（只保留在本周有效的）
     val weekCourses = remember(schedule, week) {
@@ -529,24 +546,9 @@ private fun CourseCardArea(
         }
     }
 
-    // 定位卡片：只绘制每门课在起始节的卡片，用 offset(y) 撑满跨节高度
-    val cards = remember(weekCourses, rowOffsets, totalSections) {
-        weekCourses.mapNotNull { course ->
-            val startIdx = course.startSection - 1
-            if (startIdx !in rowOffsets.indices) return@mapNotNull null
-            val endIdx = minOf(course.endSection - 1, totalSections - 1)
-            Triple(
-                course,
-                rowOffsets[startIdx],
-                rowOffsets[endIdx] - rowOffsets[startIdx] + sectionHeight.value.toInt()
-            )
-        }
-    }
-
-    // 同天同节次多课程水平平分宽度，避免重叠
-    val grouped = remember(cards) {
-        // key = (day, yStart, height) —— 同天同起止位置的课程归为一组
-        cards.groupBy { (c, y, h) -> Triple(c.dayOfWeek, y, h) }
+    // 传递闭合冲突分组：重叠课程归为一个 ConflicGroup，单门课保持 Single
+    val groups = remember(weekCourses) {
+        weekCourses.groupConflictingCourses()
     }
 
     Box(
@@ -554,32 +556,59 @@ private fun CourseCardArea(
             .fillMaxWidth()
             .height(totalGridHeight.dp)
     ) {
-        // 绘制课程卡片（绝对定位，跨节撑满高度）
-        grouped.forEach { (key, group) ->
-            val day = key.first
-            if (day !in 1..daysToShow) return@forEach
-            val yOffset = key.second
-            val height = key.third
-            val count = group.size
-            val cellWidth = dayWidth / count   // 同格多课平分宽度
+        groups.forEach { group ->
+            when (group) {
+                is CourseGroup.Single -> {
+                    val course = group.course
+                    val startIdx = course.startSection - 1
+                    if (startIdx !in rowOffsets.indices) return@forEach
+                    val endIdx = minOf(course.endSection - 1, totalSections - 1)
+                    val yOffset = rowOffsets[startIdx]
+                    val height = rowOffsets[endIdx] - rowOffsets[startIdx] + sectionHeight.value.toInt()
+                    val day = course.dayOfWeek
+                    if (day !in 1..daysToShow) return@forEach
 
-            group.forEachIndexed { idx, (course, _, _) ->
-                Box(
-                    modifier = Modifier
-                        .width(cellWidth)
-                        .height(height.dp)
-                        .offset(
-                            x = dayWidth * (day - 1) + cellWidth * idx,
-                            y = yOffset.dp
+                    Box(
+                        modifier = Modifier
+                            .width(dayWidth)
+                            .height(height.dp)
+                            .offset(x = dayWidth * (day - 1), y = yOffset.dp)
+                            .padding(horizontal = 2.dp, vertical = 2.dp)
+                    ) {
+                        CourseCell(
+                            course = course,
+                            spanSections = course.endSection - course.startSection + 1,
+                            colorIndex = courseColorMap[course.name] ?: 0,
+                            onClick = { onCourseClick(course) }
                         )
-                        .padding(horizontal = 2.dp, vertical = 2.dp)
-                ) {
-                    CourseCell(
-                        course = course,
-                        spanSections = course.endSection - course.startSection + 1,
-                        colorIndex = courseColorMap[course.name] ?: 0,
-                        onClick = { onCourseClick(course) }
-                    )
+                    }
+                }
+
+                is CourseGroup.Conflict -> {
+                    val courses = group.courses
+                    val minStart = courses.minOf { it.startSection }
+                    val maxEnd = courses.maxOf { it.endSection }
+                    val startIdx = minStart - 1
+                    if (startIdx !in rowOffsets.indices) return@forEach
+                    val endIdx = minOf(maxEnd - 1, totalSections - 1)
+                    val yOffset = rowOffsets[startIdx]
+                    val height = rowOffsets[endIdx] - rowOffsets[startIdx] + sectionHeight.value.toInt()
+                    val day = courses.first().dayOfWeek
+                    if (day !in 1..daysToShow) return@forEach
+
+                    Box(
+                        modifier = Modifier
+                            .width(dayWidth)
+                            .height(height.dp)
+                            .offset(x = dayWidth * (day - 1), y = yOffset.dp)
+                            .padding(horizontal = 2.dp, vertical = 2.dp)
+                    ) {
+                        ConflictCourseCard(
+                            courses = courses,
+                            spanSections = maxEnd - minStart + 1,
+                            onClick = { onConflictClick(group) }
+                        )
+                    }
                 }
             }
         }
@@ -641,6 +670,181 @@ fun CourseCell(course: Course, spanSections: Int, colorIndex: Int = 0, onClick: 
                     textAlign = TextAlign.Center,
                     lineHeight = 10.sp
                 )
+            }
+        }
+    }
+}
+
+/**
+ * 冲突课程聚合卡片：显示第一门课名 + 右上角数量角标。
+ * 使用 errorContainer 颜色以与普通课程卡片区分。
+ */
+@Composable
+private fun ConflictCourseCard(
+    courses: List<Course>,
+    spanSections: Int,
+    onClick: () -> Unit,
+) {
+    val backgroundColor = MaterialTheme.colorScheme.errorContainer
+    val contentColor = MaterialTheme.colorScheme.onErrorContainer
+    val singleSection = spanSections <= 1
+
+    Surface(
+        onClick = onClick,
+        modifier = Modifier.fillMaxSize(),
+        shape = RoundedCornerShape(10.dp),
+        color = backgroundColor,
+        shadowElevation = 1.dp,
+        tonalElevation = 0.dp
+    ) {
+        Box(modifier = Modifier.fillMaxSize()) {
+            // 主内容：第一门课名（按起始节次排序）
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = 4.dp, vertical = 3.dp),
+                verticalArrangement = Arrangement.Center,
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    text = courses.first().name,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = contentColor,
+                    maxLines = if (singleSection) 1 else 2,
+                    overflow = TextOverflow.Ellipsis,
+                    textAlign = TextAlign.Center,
+                    lineHeight = 12.sp
+                )
+                if (!singleSection) {
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = courses.first().location,
+                        fontSize = 9.sp,
+                        color = contentColor.copy(alpha = 0.7f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        textAlign = TextAlign.Center,
+                        lineHeight = 10.sp
+                    )
+                }
+            }
+
+            // 右上角冲突数量角标（红色圆形）
+            Surface(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(3.dp)
+                    .size(18.dp),
+                shape = CircleShape,
+                color = MaterialTheme.colorScheme.error,
+                shadowElevation = 2.dp
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Text(
+                        text = courses.size.toString(),
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onError,
+                        textAlign = TextAlign.Center,
+                        maxLines = 1
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 冲突课程详情底部弹窗：展示所有冲突课程的详细信息。
+ * 每门课保留各自的原始色带，课程间用分割线隔开。
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ConflictCourseSheet(
+    conflict: CourseGroup.Conflict,
+    sectionTimes: List<com.wofanmo.course_schedule.data.model.SectionTime>,
+    onDismiss: () -> Unit,
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = MaterialTheme.colorScheme.surface,
+        shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
+        dragHandle = null
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 32.dp)
+        ) {
+            // 冲突提示标题
+            Text(
+                text = "⏰ ${conflict.courses.size} 门课程时间冲突",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.error,
+                modifier = Modifier.padding(horizontal = 20.dp, vertical = 16.dp)
+            )
+
+            // 课程详情卡片列表
+            conflict.courses.forEachIndexed { index, course ->
+                val accentColor = if (course.color.isNotEmpty()) {
+                    parseColor(course.color)
+                        ?: CourseColorPalette[abs(course.name.hashCode()) % CourseColorPalette.size]
+                } else {
+                    CourseColorPalette[abs(course.name.hashCode()) % CourseColorPalette.size]
+                }
+
+                // 课程色带（保留原始颜色）
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 20.dp)
+                        .height(4.dp)
+                        .background(accentColor, RoundedCornerShape(topStart = 4.dp, topEnd = 4.dp))
+                )
+
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 20.dp, vertical = 12.dp)
+                ) {
+                    Text(
+                        text = course.name,
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    DetailRow(icon = "📚", label = "节次", value = "第${course.startSection}-${course.endSection}节")
+                    DetailRow(icon = "👨‍🏫", label = "教师", value = course.teacher)
+                    DetailRow(icon = "📍", label = "地点", value = course.location)
+
+                    val startTime = sectionTimes.getOrNull(course.startSection - 1)
+                    if (startTime != null) {
+                        Spacer(Modifier.height(4.dp))
+                        DetailRow(
+                            icon = "⏰",
+                            label = "时间",
+                            value = "${startTime.start} - ${
+                                sectionTimes.getOrNull(course.endSection - 1)?.end ?: ""
+                            }"
+                        )
+                    }
+                }
+
+                // 课程间分割线
+                if (index < conflict.courses.size - 1) {
+                    HorizontalDivider(
+                        modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp),
+                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+                    )
+                }
             }
         }
     }
