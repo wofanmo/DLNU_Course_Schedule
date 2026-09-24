@@ -239,6 +239,31 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
                             }
                         )
                     }
+
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 8.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(text = "自适应课表", fontSize = 16.sp)
+                            Text(
+                                text = "自动缩放课表，尽量一屏显示完整周课表",
+                                fontSize = 12.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Switch(
+                            checked = config.adaptiveSchedule,
+                            onCheckedChange = {
+                                config = config.copy(adaptiveSchedule = it)
+                                AppSettings.settingsStorage.saveConfig(config)
+                            }
+                        )
+                    }
                 }
             }
         }
@@ -383,7 +408,7 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
                         )
                         Spacer(modifier = Modifier.height(8.dp))
                         Text(
-                            text = "课程表 v1.2.0",
+                            text = "课程表 v1.3.0",
                             fontSize = 14.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -430,7 +455,6 @@ private fun PermissionRow(
  * 开学日期选择对话框（Material3 DatePicker），确认后回传 yyyy-MM-dd。
  * DatePicker 内部用 UTC 毫秒表示所选日期（UTC 零点），转换时必须用 UTC，否则时区偏移会导致日期差一天。
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ScheduleDatePickerDialog(
     initialDate: String,

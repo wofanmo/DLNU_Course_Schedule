@@ -46,6 +46,11 @@ data class AppConfig(
     val theme: String = "system",
     val firstDayOfWeek: Int = 1,
     val showWeekends: Boolean = true,
+    /**
+     * 自适应课表：网格按可用高度缩放，尽量一屏显示完本周全部课程。
+     * 关闭后回到固定行高 + 垂直滚动的旧行为。见 docs/adr/0006-adaptive-schedule-grid.md
+     */
+    val adaptiveSchedule: Boolean = true,
     /** 保留向后兼容：旧版本数据可能携带该字段，新版固定为 12 */
     val totalSections: Int = DEFAULT_TOTAL_SECTIONS,
     /** 课程提醒提前分钟数：0=关闭（不发任何通知），正值为提前提醒分钟数（预设 5/10/15/30） */

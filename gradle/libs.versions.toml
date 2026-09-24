@@ -1,4 +1,7 @@
 [versions]
+# 受 IDE 约束：IntelliJ IDEA 的 Android 插件无法导入 AGP 9 的 KMP 库模型
+# （com.android.kotlin.multiplatform.library），会报 partial resolution 导致同步失败。
+# 降到 AGP 8.x 以在 IDEA 中正常工作；如需 AGP 9 请改用 Android Studio。
 agp = "9.1.1"
 android-compileSdk = "36"
 android-minSdk = "24"
@@ -53,8 +56,9 @@ androidx-glance-appwidget = { module = "androidx.glance:glance-appwidget", versi
 
 [plugins]
 androidApplication = { id = "com.android.application", version.ref = "agp" }
-androidMultiplatformLibrary = { id = "com.android.kotlin.multiplatform.library", version.ref = "agp" }
+androidLibrary = { id = "com.android.library", version.ref = "agp" }
 composeMultiplatform = { id = "org.jetbrains.compose", version.ref = "composeMultiplatform" }
 composeCompiler = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
+kotlinAndroid = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
 kotlinMultiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }
 kotlinxSerialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }

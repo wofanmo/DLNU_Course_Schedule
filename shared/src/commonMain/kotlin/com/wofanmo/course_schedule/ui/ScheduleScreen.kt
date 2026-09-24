@@ -75,6 +75,13 @@ fun ScheduleScreen(modifier: Modifier = Modifier) {
     // 冲突课程详情弹窗状态
     var selectedConflict by remember { mutableStateOf<CourseGroup.Conflict?>(null) }
 
+    // 自适应课表开关（规则见 docs/adr/0006-adaptive-schedule-grid.md）
+    val adaptive = config.adaptiveSchedule
+
+    // 顶栏压缩状态：由网格测量回写。缩到几何下限仍放不下时，
+    // 先把顶栏从 24sp/12dp 压到 20sp/8dp 再试一次，最后才退回滚动。
+    var compactHeader by remember(schedule?.id, currentWeek, adaptive) { mutableStateOf(false) }
+
     // 切换课程的「冲突时优先显示」标记并落库（同组互斥规则见 togglePreferred 纯函数）。
     // 弹窗持有的是课程快照，落库后按 id 重新取一遍，否则要等课表重载才反映新状态。
     fun togglePreferredAndSave(course: Course) {
@@ -92,18 +99,18 @@ fun ScheduleScreen(modifier: Modifier = Modifier) {
     Column(
         modifier = modifier.fillMaxSize()
     ) {
-        // 顶部标题栏 - 带周次切换
+        // 顶部标题栏 - 带周次切换（空间不足时由 compactHeader 压缩）
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 12.dp),
+                .padding(horizontal = 16.dp, vertical = if (compactHeader) 8.dp else 12.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
             Column {
                 Text(
                     text = schedule?.name ?: "课程表",
-                    fontSize = 24.sp,
+                    fontSize = if (compactHeader) 20.sp else 24.sp,
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.onBackground,
                     maxLines = 1,
@@ -126,7 +133,10 @@ fun ScheduleScreen(modifier: Modifier = Modifier) {
                 color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.6f)
             ) {
                 Row(
-                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                    modifier = Modifier.padding(
+                        horizontal = 14.dp,
+                        vertical = if (compactHeader) 6.dp else 8.dp
+                    ),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
@@ -146,56 +156,52 @@ fun ScheduleScreen(modifier: Modifier = Modifier) {
             }
         }
 
-        // 布局尺寸与行偏移（时间栏 / 课程区 / 分隔线共用）
+        // 布局常量（与测量无关，顶栏与网格共用）
         val totalSections = config.totalSectionCount()
-        val sectionHeight = 60.dp
         val lunchBreakIndex = config.lunchBreakIndex()
         val eveningBreakIndex = config.eveningBreakIndex()
         val daysToShow = if (config.showWeekends) 7 else 5
 
-        val rowOffsets = remember(totalSections, lunchBreakIndex, eveningBreakIndex) {
-            val offsets = IntArray(totalSections)
-            var y = 0
-            for (i in 0 until totalSections) {
-                offsets[i] = y
-                y += 60 // sectionHeight
-                if (i == lunchBreakIndex && totalSections > lunchBreakIndex + 1) y += 32 // breakHeight
-                if (i == eveningBreakIndex && totalSections > eveningBreakIndex + 1) y += 32
-            }
-            offsets
+        // 本周课程：尾部裁剪与 Speed Dial 让位都以它为准
+        val weekCourses = remember(schedule, currentWeek) {
+            schedule?.courses?.filter { it.matchesWeek(currentWeek) } ?: emptyList()
         }
-        val totalGridHeight = remember(rowOffsets) { (rowOffsets.lastOrNull() ?: 0) + 60 + 16 }
 
         // 星期标题行：左侧"节"列固定，日期列随周次滑动
-        Row(
+        BoxWithConstraints(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 8.dp)
         ) {
-            Box(
-                modifier = Modifier
-                    .width(56.dp)
-                    .height(40.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    text = "节",
-                    fontSize = 12.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-            Box(modifier = Modifier.weight(1f)) {
-                AnimatedContent(
-                    targetState = currentWeek,
-                    transitionSpec = { weekTransition() },
-                    label = "weekHeaderTransition"
-                ) { week ->
-                    WeekDayHeader(
-                        schedule = schedule,
-                        currentWeek = week,
-                        today = today,
-                        showWeekends = config.showWeekends
+            // 与网格内容区同宽，故此处算出的时间栏宽度与下方一致
+            val railWidth = timeRailWidthDp(maxWidth.value, daysToShow, adaptive).dp
+
+            Row(modifier = Modifier.fillMaxWidth()) {
+                Box(
+                    modifier = Modifier
+                        .width(railWidth)
+                        .height(40.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "节",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                }
+                Box(modifier = Modifier.weight(1f)) {
+                    AnimatedContent(
+                        targetState = currentWeek,
+                        transitionSpec = { weekTransition() },
+                        label = "weekHeaderTransition"
+                    ) { week ->
+                        WeekDayHeader(
+                            schedule = schedule,
+                            currentWeek = week,
+                            today = today,
+                            showWeekends = config.showWeekends
+                        )
+                    }
                 }
             }
         }
@@ -228,63 +234,120 @@ fun ScheduleScreen(modifier: Modifier = Modifier) {
                     )
                 }
         ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .verticalScroll(rememberScrollState())
-                    .padding(8.dp)
-            ) {
-                BoxWithConstraints(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(totalGridHeight.dp)
-                ) {
-                    val dayWidth = (maxWidth - 56.dp) / daysToShow
+            // 在这里测量真正留给网格的高度：顶栏、星期栏、分隔线都已排在其上方，
+            // 因此 maxHeight 就是可用高度预算，无需手工扣除（见 ADR 0006）
+            BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+                val contentWidth = maxWidth - GRID_HORIZONTAL_PADDING_DP.dp
+                val railWidth = timeRailWidthDp(contentWidth.value, daysToShow, adaptive).dp
 
-                    Row(modifier = Modifier.fillMaxWidth()) {
-                        // 固定左侧时间栏（不参与周次切换动画）
-                        SectionTimeColumn(
-                            totalSections = totalSections,
-                            rowOffsets = rowOffsets,
-                            sectionHeight = sectionHeight,
-                            totalGridHeight = totalGridHeight,
-                            sectionTimes = DEFAULT_SECTION_TIMES
-                        )
-                        // 课程卡片区域：随周次滑动切换
-                        Box(modifier = Modifier.weight(1f)) {
-                            AnimatedContent(
-                                targetState = currentWeek,
-                                transitionSpec = { weekTransition() },
-                                modifier = Modifier.fillMaxSize(),
-                                label = "weekGridTransition"
-                            ) { week ->
-                                CourseCardArea(
-                                    schedule = schedule,
-                                    week = week,
-                                    totalSections = totalSections,
-                                    daysToShow = daysToShow,
-                                    dayWidth = dayWidth,
-                                    rowOffsets = rowOffsets,
-                                    sectionHeight = sectionHeight,
-                                    totalGridHeight = totalGridHeight,
-                                    onCourseClick = { selectedCourse = it },
-                                    onConflictClick = { selectedConflict = it }
-                                )
+                val sectionCount =
+                    if (adaptive) trimmedSectionCount(weekCourses, totalSections) else totalSections
+
+                // Speed Dial 只在真的压住课程卡时才让出高度
+                val fabReserve =
+                    if (adaptive && needsFabReserve(weekCourses, sectionCount, daysToShow)) {
+                        FAB_RESERVE_DP.dp
+                    } else {
+                        0.dp
+                    }
+
+                val budget = maxHeight - GRID_VERTICAL_PADDING_DP.dp - fabReserve
+                val metrics = if (adaptive) {
+                    computeGridMetrics(
+                        sectionCount = sectionCount,
+                        availableHeightDp = budget.value,
+                        lunchBreakIndex = lunchBreakIndex,
+                        eveningBreakIndex = eveningBreakIndex,
+                    )
+                } else {
+                    fixedGridMetrics(sectionCount, lunchBreakIndex, eveningBreakIndex)
+                }
+
+                // 缩到几何下限仍放不下：先压顶栏再试一次；仍不行则由 verticalScroll 兜底
+                if (adaptive && !compactHeader && metrics.overflows) {
+                    LaunchedEffect(Unit) { compactHeader = true }
+                }
+
+                val dayWidth = (contentWidth - railWidth) / daysToShow
+
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .verticalScroll(rememberScrollState())
+                        .padding(8.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(metrics.totalHeightDp.dp)
+                    ) {
+                        Row(modifier = Modifier.fillMaxWidth()) {
+                            // 固定左侧时间栏（不参与周次切换动画）
+                            SectionTimeColumn(
+                                totalSections = sectionCount,
+                                rowOffsets = metrics.rowOffsets,
+                                sectionHeight = metrics.sectionHeightDp.dp,
+                                totalGridHeight = metrics.totalHeightDp,
+                                sectionTimes = DEFAULT_SECTION_TIMES,
+                                railWidth = railWidth,
+                                scale = metrics.scale,
+                                adaptive = adaptive,
+                            )
+                            // 课程卡片区域：随周次滑动切换
+                            Box(modifier = Modifier.weight(1f)) {
+                                AnimatedContent(
+                                    targetState = currentWeek,
+                                    transitionSpec = { weekTransition() },
+                                    modifier = Modifier.fillMaxSize(),
+                                    label = "weekGridTransition"
+                                ) { week ->
+                                    CourseCardArea(
+                                        schedule = schedule,
+                                        week = week,
+                                        totalSections = sectionCount,
+                                        daysToShow = daysToShow,
+                                        dayWidth = dayWidth,
+                                        rowOffsets = metrics.rowOffsets,
+                                        sectionHeight = metrics.sectionHeightDp.dp,
+                                        totalGridHeight = metrics.totalHeightDp,
+                                        scale = metrics.scale,
+                                        adaptive = adaptive,
+                                        onCourseClick = { selectedCourse = it },
+                                        onConflictClick = { selectedConflict = it }
+                                    )
+                                }
                             }
+                        }
+
+                        // 午休/晚休分隔线（固定渲染，不随周次动画）
+                        if (lunchBreakIndex in 0 until sectionCount - 1) {
+                            BreakDivider(
+                                text = "午休",
+                                offsetY = metrics.rowOffsets[lunchBreakIndex] + metrics.sectionHeightDp,
+                                railWidth = railWidth,
+                                breakHeight = metrics.breakHeightDp.dp,
+                            )
+                        }
+                        if (eveningBreakIndex in 0 until sectionCount - 1) {
+                            BreakDivider(
+                                text = "晚休",
+                                offsetY = metrics.rowOffsets[eveningBreakIndex] + metrics.sectionHeightDp,
+                                railWidth = railWidth,
+                                breakHeight = metrics.breakHeightDp.dp,
+                            )
                         }
                     }
 
-                    // 午休/晚休分隔线（固定渲染，不随周次动画）
-                    if (lunchBreakIndex in 0 until totalSections - 1) {
-                        BreakDivider(
-                            text = "午休",
-                            offsetY = rowOffsets[lunchBreakIndex] + 60
-                        )
-                    }
-                    if (eveningBreakIndex in 0 until totalSections - 1) {
-                        BreakDivider(
-                            text = "晚休",
-                            offsetY = rowOffsets[eveningBreakIndex] + 60
+                    // 尾部节次被裁掉时说明原因，否则会被读成"课表没显示全"
+                    if (adaptive && sectionCount < totalSections && weekCourses.isNotEmpty()) {
+                        Text(
+                            text = "第 ${sectionCount + 1}–$totalSections 节本周无课",
+                            fontSize = 10.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 6.dp)
                         )
                     }
                 }
@@ -500,10 +563,16 @@ private fun SectionTimeColumn(
     sectionHeight: Dp,
     totalGridHeight: Int,
     sectionTimes: List<com.wofanmo.course_schedule.data.model.SectionTime>,
+    railWidth: Dp,
+    scale: Float,
+    adaptive: Boolean,
 ) {
+    val numberFont = adaptiveFontSp(12f, scale, 10f)
+    val timeFont = adaptiveFontSp(8f, scale, 7f)
+
     Box(
         modifier = Modifier
-            .width(56.dp)
+            .width(railWidth)
             .height(totalGridHeight.dp)
     ) {
         for (section in 1..totalSections) {
@@ -518,14 +587,14 @@ private fun SectionTimeColumn(
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Text(
                         text = section.toString(),
-                        fontSize = 12.sp,
+                        fontSize = if (adaptive) numberFont.sp else 12.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     val time = sectionTimes.getOrNull(sectionIndex)
                     if (time != null) {
                         Text(
                             text = "${time.start}-${time.end}",
-                            fontSize = 8.sp,
+                            fontSize = if (adaptive) timeFont.sp else 8.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
                             maxLines = 1
                         )
@@ -547,6 +616,8 @@ private fun CourseCardArea(
     rowOffsets: IntArray,
     sectionHeight: Dp,
     totalGridHeight: Int,
+    scale: Float,
+    adaptive: Boolean,
     onCourseClick: (Course) -> Unit,
     onConflictClick: (CourseGroup.Conflict) -> Unit,
 ) {
@@ -599,6 +670,9 @@ private fun CourseCardArea(
                             course = course,
                             spanSections = course.endSection - course.startSection + 1,
                             colorIndex = courseColorMap[course.name] ?: 0,
+                            scale = scale,
+                            adaptive = adaptive,
+                            availableHeight = height.dp,
                             onClick = { onCourseClick(course) }
                         )
                     }
@@ -626,6 +700,9 @@ private fun CourseCardArea(
                         ConflictCourseCard(
                             conflict = group,
                             spanSections = maxEnd - minStart + 1,
+                            scale = scale,
+                            adaptive = adaptive,
+                            availableHeight = height.dp,
                             onClick = { onConflictClick(group) }
                         )
                     }
@@ -636,7 +713,15 @@ private fun CourseCardArea(
 }
 
 @Composable
-fun CourseCell(course: Course, spanSections: Int, colorIndex: Int = 0, onClick: () -> Unit = {}) {
+fun CourseCell(
+    course: Course,
+    spanSections: Int,
+    colorIndex: Int = 0,
+    scale: Float = 1f,
+    adaptive: Boolean = false,
+    availableHeight: Dp = BASE_SECTION_HEIGHT_DP.dp,
+    onClick: () -> Unit = {},
+) {
     // 使用自定义颜色或调色板颜色
     val backgroundColor = if (course.color.isNotEmpty()) {
         parseColor(course.color) ?: CourseColorPalette[colorIndex % CourseColorPalette.size]
@@ -653,6 +738,13 @@ fun CourseCell(course: Course, spanSections: Int, colorIndex: Int = 0, onClick: 
 
     // 单节卡片高度有限：课程名最多 1 行，避免文字被裁切
     val singleSection = spanSections <= 1
+
+    // 信息优先级（ADR 0006）：课程名 2 行 → 1 行省略 → 砍地点。
+    // 字号各自守下限而非等比缩，所以卡片变矮时先砍信息、不缩字。
+    val roomForLocation = !adaptive || availableHeight >= 38.dp
+    val nameMaxLines = if (singleSection || !roomForLocation) 1 else 2
+    val nameFontSp = if (adaptive) adaptiveFontSp(11f, scale, MIN_NAME_FONT_SP) else 11f
+    val detailFontSp = if (adaptive) adaptiveFontSp(9f, scale, MIN_DETAIL_FONT_SP) else 9f
 
     Surface(
         onClick = onClick,
@@ -671,24 +763,24 @@ fun CourseCell(course: Course, spanSections: Int, colorIndex: Int = 0, onClick: 
         ) {
             Text(
                 text = course.name,
-                fontSize = 11.sp,
+                fontSize = nameFontSp.sp,
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onPrimaryContainer,
-                maxLines = if (singleSection) 1 else 2,
+                maxLines = nameMaxLines,
                 overflow = TextOverflow.Ellipsis,
                 textAlign = TextAlign.Center,
-                lineHeight = 12.sp
+                lineHeight = (nameFontSp * 1.1f).sp
             )
-            if (!singleSection) {
+            if (!singleSection && roomForLocation) {
                 Spacer(modifier = Modifier.height(2.dp))
                 Text(
                     text = course.location,
-                    fontSize = 9.sp,
+                    fontSize = detailFontSp.sp,
                     color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     textAlign = TextAlign.Center,
-                    lineHeight = 10.sp
+                    lineHeight = (detailFontSp * 1.1f).sp
                 )
             }
         }
@@ -704,12 +796,21 @@ fun CourseCell(course: Course, spanSections: Int, colorIndex: Int = 0, onClick: 
 private fun ConflictCourseCard(
     conflict: CourseGroup.Conflict,
     spanSections: Int,
+    scale: Float,
+    adaptive: Boolean,
+    availableHeight: Dp,
     onClick: () -> Unit,
 ) {
     val backgroundColor = MaterialTheme.colorScheme.errorContainer
     val contentColor = MaterialTheme.colorScheme.onErrorContainer
     val singleSection = spanSections <= 1
     val primary = conflict.primaryCourse()
+
+    // 信息优先级与普通卡片一致（ADR 0006）
+    val roomForLocation = !adaptive || availableHeight >= 38.dp
+    val nameMaxLines = if (singleSection || !roomForLocation) 1 else 2
+    val nameFontSp = if (adaptive) adaptiveFontSp(11f, scale, MIN_NAME_FONT_SP) else 11f
+    val detailFontSp = if (adaptive) adaptiveFontSp(9f, scale, MIN_DETAIL_FONT_SP) else 9f
 
     Surface(
         onClick = onClick,
@@ -730,24 +831,24 @@ private fun ConflictCourseCard(
             ) {
                 Text(
                     text = primary.name,
-                    fontSize = 11.sp,
+                    fontSize = nameFontSp.sp,
                     fontWeight = FontWeight.Bold,
                     color = contentColor,
-                    maxLines = if (singleSection) 1 else 2,
+                    maxLines = nameMaxLines,
                     overflow = TextOverflow.Ellipsis,
                     textAlign = TextAlign.Center,
-                    lineHeight = 12.sp
+                    lineHeight = (nameFontSp * 1.1f).sp
                 )
-                if (!singleSection) {
+                if (!singleSection && roomForLocation) {
                     Spacer(modifier = Modifier.height(2.dp))
                     Text(
                         text = primary.location,
-                        fontSize = 9.sp,
+                        fontSize = detailFontSp.sp,
                         color = contentColor.copy(alpha = 0.7f),
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                         textAlign = TextAlign.Center,
-                        lineHeight = 10.sp
+                        lineHeight = (detailFontSp * 1.1f).sp
                     )
                 }
             }
@@ -907,16 +1008,16 @@ private fun ConflictCourseSheet(
 
 /** 大节之间的休整分隔行（午休/晚休），横跨整行，通过 offsetY 绝对定位 */
 @Composable
-private fun BreakDivider(text: String, offsetY: Int) {
+private fun BreakDivider(text: String, offsetY: Int, railWidth: Dp, breakHeight: Dp) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .height(32.dp)
+            .height(breakHeight)
             .offset(y = offsetY.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         // 左侧节次列留空
-        Spacer(Modifier.width(56.dp))
+        Spacer(Modifier.width(railWidth))
         // 分隔线 + 图标 + 文字
         HorizontalDivider(
             modifier = Modifier.weight(1f),
